@@ -2,7 +2,9 @@
 
 > Experimental: flowcell is an early, experimental state library. APIs and behavior may change while the graph model settles.
 
-A small Flow typed state graph for React.
+An experimental Flow typed state management library for React, built around a client state graph of cells and derived values.
+
+The core idea is deliberately small: state is a `cell`, computed state is `derived`, React reads everything through one `use` hook, and `transaction` batches writes. SSR, Suspense, and preloading exist to make that state model production-friendly in modern React; they are not a pivot into a remote resource framework.
 
 ```js
 import { cell, use } from "flowcell";
@@ -43,6 +45,10 @@ const filteredPosts = derived([query, posts], (q, allPosts) =>
 ```js
 const fullName = derived(() => `${firstName.get()} ${lastName.get()}`);
 ```
+
+## Philosophy
+
+flowcell is a state management library first. The graph is client state by default: cells hold writable application state, derived nodes model synchronous or Suspense-backed computed state, and scopes isolate that graph per request or app root. Remote data, Relay-style resources, and server cache orchestration can layer on later without becoming the center of the API.
 
 ## Suspense
 

@@ -1,7 +1,7 @@
 {
   "name": "flowcell",
   "version": "0.1.0",
-  "description": "Experimental Flow typed React state graph built around cells and derived values.",
+  "description": "Experimental Flow typed React state management library built around cells and derived values.",
   "packageManager": "yarn@1.22.22",
   "main": "./Flowcell.js",
   "module": "./Flowcell.mjs",
@@ -31,6 +31,7 @@
   "keywords": [
     "flow",
     "react",
+    "state-management",
     "state",
     "suspense"
   ],
