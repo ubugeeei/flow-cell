@@ -8,19 +8,20 @@ import {
   trackReadable,
   uniqueReadables,
   withDependencyTracking,
-} from "./FlowCell.Internal";
+} from "./Internal";
 import type {
   AnyReadable,
   AsyncDerivedFactory,
   DependencyCollector,
   Derived,
   DerivedFactory,
+  Getter,
   GraphMeta,
   Listener,
   NodeOptions,
   Readable,
   Unsubscribe,
-} from "./FlowCell.Types";
+} from "./Types";
 
 type NormalizedDerivation<T> = {
   +explicitDeps: Array<AnyReadable>,
@@ -28,16 +29,23 @@ type NormalizedDerivation<T> = {
   +options: ?NodeOptions,
 };
 
+function createGetter(): Getter {
+  return (<T>(readable: Readable<T>): T => {
+    trackReadable(readable);
+    return readable.get();
+  });
+}
+
 function normalizeDerivation<T>(
-  depsOrFn: AnyReadable | $ReadOnlyArray<AnyReadable> | (() => T),
-  maybeFn?: (...args: Array<any>) => T,
+  depsOrFn: AnyReadable | $ReadOnlyArray<AnyReadable> | (() => T) | ((get: Getter) => T),
+  maybeFn?: ((...args: Array<any>) => T) | NodeOptions,
   options?: NodeOptions
 ): NormalizedDerivation<T> {
-  if (typeof depsOrFn === "function" && maybeFn == null) {
+  if (typeof depsOrFn === "function" && typeof maybeFn !== "function") {
     return {
       explicitDeps: [],
-      read: depsOrFn as any,
-      options,
+      read: () => (depsOrFn as any)(createGetter()),
+      options: maybeFn ?? options,
     };
   }
 
@@ -46,7 +54,7 @@ function normalizeDerivation<T>(
     : [depsOrFn as any];
   const fn = maybeFn;
 
-  if (fn == null) {
+  if (typeof fn !== "function") {
     throw new Error("derived requires a compute function when dependencies are provided.");
   }
 
@@ -117,6 +125,10 @@ export class DerivedImpl<T> implements Readable<T> {
 
     return () => {
       this._listeners.delete(listener);
+
+      if (this._listeners.size === 0) {
+        this._releaseDependencies();
+      }
     };
   }
 
@@ -155,11 +167,23 @@ export class DerivedImpl<T> implements Readable<T> {
     this._deps = nextDeps;
     this._depUnsubscribers = nextDeps.map(dep => dep.subscribe(this._onDependencyChange));
   }
+
+  _releaseDependencies(): void {
+    for (const unsubscribe of this._depUnsubscribers) {
+      unsubscribe();
+    }
+
+    this._deps = [];
+    this._depUnsubscribers = [];
+    this._state = "dirty";
+    this._value = undefined;
+    this._error = undefined;
+  }
 }
 
 function createDerived<T>(
-  depsOrFn: AnyReadable | $ReadOnlyArray<AnyReadable> | (() => T),
-  maybeFn?: (...args: Array<any>) => T,
+  depsOrFn: AnyReadable | $ReadOnlyArray<AnyReadable> | (() => T) | ((get: Getter) => T),
+  maybeFn?: ((...args: Array<any>) => T) | NodeOptions,
   options?: NodeOptions
 ): Derived<T> {
   return new DerivedImpl(normalizeDerivation(depsOrFn, maybeFn, options));
@@ -241,6 +265,10 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
 
     return () => {
       this._listeners.delete(listener);
+
+      if (this._listeners.size === 0) {
+        this._releaseDependencies();
+      }
     };
   }
 
@@ -308,11 +336,26 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
     this._deps = nextDeps;
     this._depUnsubscribers = nextDeps.map(dep => dep.subscribe(this._onDependencyChange));
   }
+
+  _releaseDependencies(): void {
+    this._version += 1;
+
+    for (const unsubscribe of this._depUnsubscribers) {
+      unsubscribe();
+    }
+
+    this._deps = [];
+    this._depUnsubscribers = [];
+    this._state = "idle";
+    this._value = undefined;
+    this._error = undefined;
+    this._promise = null;
+  }
 }
 
 function createAsyncDerived<T>(
-  depsOrFn: AnyReadable | $ReadOnlyArray<AnyReadable> | (() => Promise<T>),
-  maybeFn?: (...args: Array<any>) => Promise<T>,
+  depsOrFn: AnyReadable | $ReadOnlyArray<AnyReadable> | (() => Promise<T>) | ((get: Getter) => Promise<T>),
+  maybeFn?: ((...args: Array<any>) => Promise<T>) | NodeOptions,
   options?: NodeOptions
 ): Derived<T> {
   return new AsyncDerivedImpl(normalizeDerivation(depsOrFn, maybeFn, options));

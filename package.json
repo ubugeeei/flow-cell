@@ -7,9 +7,20 @@
   "module": "./dist/FlowCell.mjs",
   "exports": {
     ".": {
+      "react-server": "./dist/Server.mjs",
       "import": "./dist/FlowCell.mjs",
       "require": "./dist/FlowCell.js",
       "default": "./dist/FlowCell.mjs"
+    },
+    "./client": {
+      "import": "./dist/Client.mjs",
+      "require": "./dist/Client.js",
+      "default": "./dist/Client.mjs"
+    },
+    "./server": {
+      "import": "./dist/Server.mjs",
+      "require": "./dist/Server.js",
+      "default": "./dist/Server.mjs"
     },
     "./package.json": "./package.json"
   },

@@ -8,7 +8,7 @@ import type {
   Listener,
   NodeOptions,
   NodeType,
-} from "./FlowCell.Types";
+} from "./Types";
 
 let nextNodeID = 1;
 const graphMetas: Set<GraphMeta> = new Set();

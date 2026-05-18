@@ -5,7 +5,7 @@ import {
   notifyListeners,
   registerReadable,
   trackReadable,
-} from "./FlowCell.Internal";
+} from "./Internal";
 import type {
   Cell,
   GraphMeta,
@@ -13,7 +13,7 @@ import type {
   NodeOptions,
   Unsubscribe,
   Writable,
-} from "./FlowCell.Types";
+} from "./Types";
 
 export class CellImpl<T> implements Writable<T> {
   _initial: T;

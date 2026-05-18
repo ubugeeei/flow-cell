@@ -1,0 +1,23 @@
+/* @flow strict */
+
+export type Listener = () => void;
+export type Unsubscribe = () => void;
+
+export interface Readable<+T> {
+  get(): T;
+  subscribe(listener: Listener): Unsubscribe;
+}
+
+export interface Scope {
+  get<T>(readable: Readable<T>): T;
+  subscribe<T>(readable: Readable<T>, listener: Listener): Unsubscribe;
+}
+
+export type ProviderProps = {
+  +children?: React.Node,
+  +scope: Scope,
+  +setAsDefault?: boolean,
+};
+
+declare export function Provider(props: ProviderProps): React.Node;
+declare export function useCell<T>(readable: Readable<T>): T;

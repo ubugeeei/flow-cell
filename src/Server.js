@@ -12,7 +12,6 @@ export type {
   Keyed,
   Listener,
   NodeOptions,
-  ProviderProps,
   Readable,
   Scope,
   ScopeSnapshot,
@@ -35,8 +34,4 @@ export {
   hydrate,
   preload,
 } from "./Scope";
-export {
-  Provider,
-  useCell,
-} from "./React";
 export { keyed } from "./Keyed";

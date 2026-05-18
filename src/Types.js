@@ -17,6 +17,7 @@ export interface Writable<T> extends Readable<T> {
 
 export type Cell<T> = Writable<T>;
 export type Derived<+T> = Readable<T>;
+export type Getter = <T>(readable: Readable<T>) => T;
 
 export type NodeOptions = {
   +key?: string,
@@ -84,6 +85,7 @@ export type DependencyCollector = {
 
 export type DerivedFactory = {
   <T>(fn: () => T, options?: NodeOptions): Derived<T>,
+  <T>(fn: (get: Getter) => T, options?: NodeOptions): Derived<T>,
   <A, T>(dep: Readable<A>, fn: (A) => T, options?: NodeOptions): Derived<T>,
   <A, T>(deps: [Readable<A>], fn: (A) => T, options?: NodeOptions): Derived<T>,
   <A, B, T>(deps: [Readable<A>, Readable<B>], fn: (A, B) => T, options?: NodeOptions): Derived<T>,
@@ -94,6 +96,7 @@ export type DerivedFactory = {
 
 export type AsyncDerivedFactory = {
   <T>(fn: () => Promise<T>, options?: NodeOptions): Derived<T>,
+  <T>(fn: (get: Getter) => Promise<T>, options?: NodeOptions): Derived<T>,
   <A, T>(dep: Readable<A>, fn: (A) => Promise<T>, options?: NodeOptions): Derived<T>,
   <A, T>(deps: [Readable<A>], fn: (A) => Promise<T>, options?: NodeOptions): Derived<T>,
   <A, B, T>(deps: [Readable<A>, Readable<B>], fn: (A, B) => Promise<T>, options?: NodeOptions): Derived<T>,

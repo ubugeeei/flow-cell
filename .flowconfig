@@ -16,6 +16,8 @@
 [options]
 component_syntax=true
 module.name_mapper='^flow-cell$' -> '<PROJECT_ROOT>/src/FlowCell.js'
+module.name_mapper='^flow-cell/client$' -> '<PROJECT_ROOT>/src/Client.js'
+module.name_mapper='^flow-cell/server$' -> '<PROJECT_ROOT>/src/Server.js'
 react.runtime=automatic
 
 [strict]

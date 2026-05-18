@@ -1,7 +1,7 @@
 /* @flow strict */
 
-import { CellImpl } from "./FlowCell.Cell";
-import { AsyncDerivedImpl, DerivedImpl } from "./FlowCell.Derived";
+import { CellImpl } from "./Cell";
+import { AsyncDerivedImpl, DerivedImpl } from "./Derived";
 import {
   clearDefaultScope,
   notifyListeners,
@@ -10,7 +10,7 @@ import {
   uniqueReadables,
   withDependencyTracking,
   withScope,
-} from "./FlowCell.Internal";
+} from "./Internal";
 import type {
   AnyReadable,
   Cell,
@@ -20,7 +20,7 @@ import type {
   Scope,
   ScopeSnapshot,
   Unsubscribe,
-} from "./FlowCell.Types";
+} from "./Types";
 
 type ScopedCellState<T> = {
   value: T,
@@ -278,6 +278,10 @@ export class ScopeImpl implements Scope {
 
     return () => {
       state.listeners.delete(listener);
+
+      if (state.listeners.size === 0) {
+        this._releaseScopedDerivedState(state);
+      }
     };
   }
 
@@ -344,6 +348,18 @@ export class ScopeImpl implements Scope {
     }
   }
 
+  _releaseScopedDerivedState(state: ScopedDerivedState): void {
+    for (const unsubscribe of state.depUnsubscribers) {
+      unsubscribe();
+    }
+
+    state.deps = [];
+    state.depUnsubscribers = [];
+    state.state = "dirty";
+    state.value = undefined;
+    state.error = undefined;
+  }
+
   _getAsyncDerived<T>(derivedValue: AsyncDerivedImpl<T>): T {
     const state = this._getAsyncDerivedState(derivedValue);
 
@@ -376,6 +392,10 @@ export class ScopeImpl implements Scope {
 
     return () => {
       state.listeners.delete(listener);
+
+      if (state.listeners.size === 0) {
+        this._releaseScopedAsyncDerivedState(state);
+      }
     };
   }
 
@@ -471,6 +491,21 @@ export class ScopeImpl implements Scope {
 
     state.promise = promise;
     state.state = "pending";
+  }
+
+  _releaseScopedAsyncDerivedState(state: ScopedAsyncDerivedState): void {
+    state.version += 1;
+
+    for (const unsubscribe of state.depUnsubscribers) {
+      unsubscribe();
+    }
+
+    state.deps = [];
+    state.depUnsubscribers = [];
+    state.state = "idle";
+    state.value = undefined;
+    state.error = undefined;
+    state.promise = null;
   }
 
   _bindScopedDependencies(

@@ -1,6 +1,6 @@
 /* @flow strict */
 
-import type { Keyed } from "./FlowCell.Types";
+import type { Keyed } from "./Types";
 
 function defaultKeyFor(value: mixed): string {
   const type = typeof value;

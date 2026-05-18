@@ -1,16 +1,18 @@
 /* @flow strict */
 
+"use client";
+
 import * as React from "react";
 import {
   getDefaultScope,
   isPromiseLike,
   setDefaultScope,
-} from "./FlowCell.Internal";
+} from "./Internal";
 import type {
   Listener,
   ProviderProps,
   Readable,
-} from "./FlowCell.Types";
+} from "./Types";
 
 const ScopeContext: React.Context<?any> = React.createContext(null);
 const suspenseSnapshots: WeakMap<any, SuspenseSnapshot> = new WeakMap();

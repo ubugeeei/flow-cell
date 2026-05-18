@@ -4,7 +4,6 @@ const babel = require("@babel/core");
 
 const root = __dirname;
 const srcDir = path.join(root, "src");
-const flowSrc = path.join(root, "src", "FlowCell.js.flow");
 const dist = path.join(root, "dist");
 
 const flowPreset = [
@@ -17,7 +16,7 @@ const flowPreset = [
 
 function rewriteEsmImports(code) {
   return code.replace(
-    /(from\s+["']\.\/FlowCell[^"']*?)(["'])/g,
+    /(from\s+["']\.\/[^"']*?)(["'])/g,
     (match, specifier, quote) => (
       specifier.endsWith(".mjs") || specifier.endsWith(".js")
         ? match
@@ -50,7 +49,7 @@ fs.mkdirSync(dist, { recursive: true });
 
 for (const fileName of fs.readdirSync(srcDir)) {
   if (
-    !fileName.startsWith("FlowCell") ||
+    !/^[A-Z]/.test(fileName) ||
     !fileName.endsWith(".js") ||
     fileName.endsWith(".test.js") ||
     fileName.endsWith(".flowtest.js")
@@ -78,4 +77,8 @@ for (const fileName of fs.readdirSync(srcDir)) {
   });
 }
 
-fs.copyFileSync(flowSrc, path.join(dist, "FlowCell.js.flow"));
+for (const fileName of fs.readdirSync(srcDir)) {
+  if (/^[A-Z]/.test(fileName) && fileName.endsWith(".js.flow")) {
+    fs.copyFileSync(path.join(srcDir, fileName), path.join(dist, fileName));
+  }
+}

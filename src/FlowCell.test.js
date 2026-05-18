@@ -36,6 +36,17 @@ test("cell stores writable state", () => {
   expect(listener).toHaveBeenCalledTimes(2);
 });
 
+test("cell uses Object.is equality for NaN stability", () => {
+  const value = cell(NaN);
+  const listener = jest.fn();
+
+  value.subscribe(listener);
+  value.set(NaN);
+
+  expect(Object.is(value.get(), NaN)).toBe(true);
+  expect(listener).not.toHaveBeenCalled();
+});
+
 test("transaction batches listener notifications", () => {
   const count = cell(0);
   const listener = jest.fn();
@@ -166,6 +177,57 @@ test("derived tracks dependencies read during compute", () => {
   expect(fullName.get()).toBe("Ada Byron");
 });
 
+test("derived supports getter-style reads with dynamic dependencies", () => {
+  const useFirst = cell(true);
+  const first = cell("Ada");
+  const last = cell("Lovelace");
+  const selected = derived(get => (get(useFirst) ? get(first) : get(last)));
+
+  expect(selected.get()).toBe("Ada");
+
+  useFirst.set(false);
+
+  expect(selected.get()).toBe("Lovelace");
+
+  first.set("Grace");
+  last.set("Byron");
+
+  expect(selected.get()).toBe("Byron");
+});
+
+test("derived releases global dependencies when no subscribers remain", () => {
+  const source = cell(1);
+  const doubled = derived(get => get(source) * 2);
+  const unsubscribe = doubled.subscribe(() => {});
+
+  expect(doubled.get()).toBe(2);
+  expect(inspectGraph().nodes.find(node => node.id === doubled._meta.id).dependencies.length).toBe(1);
+
+  unsubscribe();
+
+  expect(inspectGraph().nodes.find(node => node.id === doubled._meta.id).dependencies.length).toBe(0);
+  source.set(2);
+  expect(doubled.get()).toBe(4);
+});
+
+test("scoped derived values release dependencies when no subscribers remain", () => {
+  const source = cell(1, { key: "test.scoped.release.source" });
+  const doubled = derived(get => get(source) * 2, { key: "test.scoped.release.doubled" });
+  const scope = createScope();
+  const unsubscribe = scope.subscribe(doubled, () => {});
+
+  expect(scope.get(doubled)).toBe(2);
+  expect(inspectGraph(scope).nodes.find(node => node.id === "test.scoped.release.doubled").dependencies).toEqual([
+    "test.scoped.release.source",
+  ]);
+
+  unsubscribe();
+
+  expect(inspectGraph(scope).nodes.find(node => node.id === "test.scoped.release.doubled").dependencies).toEqual([]);
+  scope.set(source, 2);
+  expect(scope.get(doubled)).toBe(4);
+});
+
 test("keyed memoizes values by key", () => {
   const countByID = keyed(id => cell({ id, count: 0 }));
 
@@ -199,6 +261,19 @@ test("asyncDerived suspends while pending and returns resolved data", async () =
   await Promise.resolve();
 
   expect(user.get()).toEqual({ id: "2", name: "User 2" });
+});
+
+test("asyncDerived supports getter-style reads", async () => {
+  const userID = cell("1");
+  const user = asyncDerived(async get => {
+    const id = get(userID);
+    return { id, name: `User ${id}` };
+  });
+
+  expect(() => user.get()).toThrow(Promise);
+  await Promise.resolve();
+
+  expect(user.get()).toEqual({ id: "1", name: "User 1" });
 });
 
 test("inspectGraph exposes serializable nodes and dependency edges", () => {

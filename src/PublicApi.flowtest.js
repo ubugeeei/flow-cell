@@ -10,17 +10,28 @@ import {
   keyed,
   preload,
   transaction,
-  useCell,
 } from "flow-cell";
-import type { Cell, Derived, Scope } from "flow-cell";
+import { useCell as useClientCell } from "flow-cell/client";
+import {
+  cell as serverCell,
+  derived as serverDerived,
+} from "flow-cell/server";
+import type {
+  Cell,
+  Derived,
+  Getter,
+  Scope,
+} from "flow-cell";
 
 const count: Cell<number> = cell(0, { key: "flowtest.count" });
 const doubled: Derived<number> = derived(count, value => value * 2);
+const tripled: Derived<number> = derived((get: Getter) => get(count) * 3);
 const label: Derived<string> = derived([count, doubled], (value, double) => `${value}:${double}`);
-const resource: Derived<{ +id: string }> = asyncDerived(label, async id => ({ id }));
+const resource: Derived<{ +id: string }> = asyncDerived(async (get: Getter) => ({ id: get(label) }));
 const scope: Scope = createScope();
 const scopedCount: Cell<number> = scope.bind(count);
 const family = keyed((id: string) => cell(id));
+const serverOnly: Derived<number> = serverDerived(serverCell(1), value => value + 1);
 
 scope.set(count, 1);
 scope.update(count, value => value + 1);
@@ -37,7 +48,7 @@ transaction(() => {
 });
 
 hook useCountValue(): number {
-  const value: number = useCell(count);
+  const value: number = useClientCell(count);
   return value;
 }
 
@@ -53,6 +64,8 @@ const node: React.Node = (
 );
 
 void resource;
+void tripled;
 void readString;
 void loaded;
+void serverOnly;
 void node;

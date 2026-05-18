@@ -4,7 +4,7 @@
 
 An experimental Flow typed state management library for React 19, built around a client state graph of cells and derived values.
 
-The core idea is deliberately small: state is a `cell`, computed state is `derived`, React reads everything through one `useCell` hook, and `transaction` batches writes. SSR, Suspense, and preloading exist to make that state model production-friendly in modern React; they are not a pivot into a remote resource framework.
+The core idea is deliberately small: state is a `cell`, computed state is `derived`, React reads everything through one `useCell` hook, and `transaction` batches writes. The read style is intentionally closer to Jotai, while scopes, keyed graphs, SSR, RSC, and Suspense keep the Recoil graph model alive for modern React.
 
 ```js
 import { cell, useCell } from "flow-cell";
@@ -41,9 +41,10 @@ import { cell, derived, useCell } from "flow-cell";
 const query = cell<string>("");
 const posts = cell<Array<Post>>([]);
 
-const filteredPosts = derived([query, posts], (q, allPosts) =>
-  allPosts.filter(post => post.title.includes(q))
-);
+const filteredPosts = derived(get => {
+  const q = get(query);
+  return get(posts).filter(post => post.title.includes(q));
+});
 
 component Search() {
   const q = useCell(query);
@@ -58,10 +59,10 @@ component Search() {
 }
 ```
 
-`derived` also supports read tracking:
+`derived` also supports explicit dependency lists:
 
 ```js
-const fullName = derived(() => `${firstName.get()} ${lastName.get()}`);
+const fullName = derived([firstName, lastName], (first, last) => `${first} ${last}`);
 ```
 
 ## Philosophy
@@ -83,7 +84,8 @@ type User = {
 
 const userID = cell<string>("1");
 
-const user = asyncDerived(userID, async id => {
+const user = asyncDerived(async get => {
+  const id = get(userID);
   return await fetchUser(id);
 });
 
@@ -108,6 +110,28 @@ await preload(user);
 ```
 
 React's own `use` cannot subscribe to arbitrary external stores directly; it accepts thenables and contexts. FlowCell's `useCell` is the state graph hook that performs the external-store subscription, then delegates pending async values to React's `use`.
+
+## RSC
+
+Use `flow-cell/server` in React Server Components and server-only code. It exports the graph primitives without importing React hooks or `react-dom`.
+
+```js
+import { cell, createScope, dehydrate } from "flow-cell/server";
+
+const requestID = cell<string>("", { key: "requestID" });
+
+export async function loadFlowCellSnapshot(id: string) {
+  const scope = createScope();
+  scope.set(requestID, id);
+  return dehydrate(scope);
+}
+```
+
+Use `flow-cell/client` from Client Components. That entry carries `"use client"` and only exports `Provider` and `useCell`.
+
+```js
+import { Provider, useCell } from "flow-cell/client";
+```
 
 ## SSR scopes
 
@@ -160,11 +184,12 @@ scope.dispose();
 
 ## Package Shape
 
-Source lives in `src/` with module-prefixed files such as `FlowCell.Cell.js`, `FlowCell.Scope.js`, and `FlowCell.React.js`. `yarn build` generates publishable artifacts in `dist/`:
+Source lives in `src/` with PascalCase files such as `Cell.js`, `Scope.js`, and `React.js`. `yarn build` generates publishable artifacts in `dist/`:
 
 - `dist/FlowCell.js` for CommonJS
 - `dist/FlowCell.mjs` for ESM
 - `dist/FlowCell.js.flow` for Flow consumers
+- `dist/Client.js` / `dist/Server.js` for explicit RSC boundaries
 
 Use the committed Yarn 4 release for development:
 
@@ -178,6 +203,7 @@ yarn verify
 - Scopes isolate state per request or root; dispose them when the request/root is finished.
 - Async resources follow React's Suspense contract: pending promises are thrown, rejected values are thrown, and `preload()` can warm them before render.
 - Snapshots are versioned and keyed; use stable `key` values for any cell that crosses SSR hydration.
+- Server and client entries are split so RSC code can use the graph without pulling React client hooks.
 - Published files are flat and side-effect free: CJS, ESM, Flow declarations, README, and LICENSE only.
 
 ## Keyed values
