@@ -20,9 +20,15 @@ export class CellImpl<T> implements Writable<T> {
   _initial: T;
   _value: T;
   _listeners: Set<Listener> = new Set();
+  _serializable: boolean;
   _meta: GraphMeta;
 
   constructor(initial: T, options?: NodeOptions): void {
+    this._serializable = options?.serialize === true;
+    if (this._serializable && options?.key == null) {
+      throw new Error("Serializable FlowCell cells require a stable key.");
+    }
+
     this._initial = initial;
     this._value = initial;
     this._meta = registerReadable(

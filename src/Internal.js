@@ -21,7 +21,13 @@ const pendingListeners: Set<Listener> = new Set();
 
 let activeCollector: ?DependencyCollector = null;
 let activeScope: ?any = null;
-let defaultScope: ?any = null;
+let defaultScopeStack: Array<any> = [];
+
+const MAX_PRELOAD_RETRIES = 1000;
+
+function compactDefaultScopeStack(): void {
+  defaultScopeStack = defaultScopeStack.filter(scope => scope != null && !scope._disposed);
+}
 
 export function registerReadable(
   readable: AnyReadable,
@@ -32,8 +38,17 @@ export function registerReadable(
   getDependencies: (scope: ?any) => $ReadOnlyArray<AnyReadable>
 ): GraphMeta {
   const id = options?.key ?? `${type}:${String(nextNodeID++)}`;
+  if (typeof id !== "string") {
+    throw new TypeError("FlowCell node key must be a string.");
+  }
+
   if (registeredNodeIDs.has(id)) {
     throw new Error(`Duplicate FlowCell node key: ${id}`);
+  }
+
+  const label = options?.name ?? id;
+  if (typeof label !== "string") {
+    throw new TypeError("FlowCell node name must be a string.");
   }
 
   registeredNodeIDs.add(id);
@@ -42,7 +57,7 @@ export function registerReadable(
     readable,
     id,
     type,
-    label: options?.name ?? id,
+    label,
     getStatus,
     getSubscriberCount,
     getDependencies,
@@ -172,7 +187,7 @@ export function withScope<T>(scope: any, fn: () => T): T {
 }
 
 export function currentScope(): ?any {
-  const scope = activeScope ?? defaultScope;
+  const scope = activeScope ?? getDefaultScope();
 
   if (scope != null) {
     scope._assertActive();
@@ -182,17 +197,22 @@ export function currentScope(): ?any {
 }
 
 export function getDefaultScope(): ?any {
-  return defaultScope;
+  compactDefaultScopeStack();
+  return defaultScopeStack.length === 0 ? null : defaultScopeStack[defaultScopeStack.length - 1];
 }
 
 export function setDefaultScope(scope: ?any): void {
-  defaultScope = scope;
+  if (scope == null) {
+    defaultScopeStack = [];
+    return;
+  }
+
+  defaultScopeStack = defaultScopeStack.filter(existing => existing !== scope);
+  defaultScopeStack.push(scope);
 }
 
 export function clearDefaultScope(scope: any): void {
-  if (defaultScope === scope) {
-    defaultScope = null;
-  }
+  defaultScopeStack = defaultScopeStack.filter(existing => existing !== scope);
 }
 
 export function uniqueReadables(readables: $ReadOnlyArray<AnyReadable>): Array<AnyReadable> {
@@ -231,12 +251,16 @@ export function isPromiseLike(value: mixed): boolean {
   );
 }
 
-export function preloadReadable<T>(read: () => T): Promise<T> {
+export function preloadReadable<T>(read: () => T, retryCount?: number = 0): Promise<T> {
   try {
     return Promise.resolve(read());
   } catch (thrown) {
     if (isPromiseLike(thrown)) {
-      return Promise.resolve(thrown).then(() => preloadReadable(read));
+      if (retryCount >= MAX_PRELOAD_RETRIES) {
+        return Promise.reject(new Error("FlowCell preload exceeded the retry limit."));
+      }
+
+      return Promise.resolve(thrown).then(() => preloadReadable(read, retryCount + 1));
     }
 
     return Promise.reject(thrown);

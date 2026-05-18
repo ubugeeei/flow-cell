@@ -118,7 +118,7 @@ Use `flow-cell/server` in React Server Components and server-only code. It expor
 ```js
 import { cell, createScope, dehydrate } from "flow-cell/server";
 
-const requestID = cell<string>("", { key: "requestID" });
+const requestID = cell<string>("", { key: "requestID", serialize: true });
 
 export async function loadFlowCellSnapshot(id: string) {
   const scope = createScope();
@@ -140,7 +140,7 @@ Use a fresh `Scope` per request so module-level cells do not leak state between 
 ```js
 import { Provider, createScope, dehydrate, hydrate, useCell } from "flow-cell";
 
-const userID = cell<string>("anonymous", { key: "userID" });
+const userID = cell<string>("anonymous", { key: "userID", serialize: true });
 
 component App() {
   const id = useCell(userID);
@@ -167,7 +167,7 @@ hydrateRoot(
 );
 ```
 
-Pass stable `key` values to cells that should survive dehydration across server and client bundles. On the client, `Provider` installs its scope as the default target for `cell.set()` / `cell.update()` calls made from event handlers; pass `setAsDefault={false}` for manually managed multi-root apps.
+Pass stable `key` values and `serialize: true` to cells that should survive dehydration across server and client bundles. Cells are excluded from snapshots by default so server-only values, auth material, and other sensitive state are not serialized just because SSR touched them. On the client, `Provider` installs its scope as the default target for `cell.set()` / `cell.update()` calls made from event handlers; pass `setAsDefault={false}` for manually managed multi-root apps.
 
 For multi-root apps, bind writes explicitly:
 
@@ -204,7 +204,9 @@ Development and CI run on active Node.js LTS or newer.
 
 - Scopes isolate state per request or root; dispose them when the request/root is finished.
 - Async resources follow React's Suspense contract: pending promises are thrown, rejected values are thrown, and `preload()` can warm them before render.
-- Snapshots are versioned and keyed; use stable `key` values for any cell that crosses SSR hydration.
+- Snapshots are versioned and keyed; use stable `key` values plus `serialize: true` for any cell that intentionally crosses SSR hydration.
+- Treat snapshots as untrusted input at the boundary: FlowCell stores snapshot cells in null-prototype records and only hydrates own keys.
+- Getter-style `derived` and `asyncDerived` reads must happen synchronously during the compute call. Read dependencies before `await`, then use those values after the async boundary.
 - Server and client entries are split so RSC code can use the graph without pulling React client hooks.
 - Published files are flat and side-effect free: CJS, ESM, Flow declarations, README, and LICENSE only.
 - Derived nodes release unobserved dependency subscriptions after React and Suspense have a chance to retry, which keeps SSR reads and preloads from retaining graph edges.
