@@ -2,19 +2,19 @@
 
 import {
   cancelPendingListener,
+  createDependencyTracker,
   currentScope,
   isPromiseLike,
   notifyListeners,
   registerReadable,
-  sameReadables,
+  replaceDependencySubscriptions,
   trackReadable,
-  uniqueReadables,
+  unsubscribeAll,
   withDependencyTracking,
 } from "./Internal";
 import type {
   AnyReadable,
   AsyncDerivedFactory,
-  DependencyCollector,
   Derived,
   DerivedFactory,
   Getter,
@@ -176,17 +176,12 @@ export class DerivedImpl<T> implements Readable<T> {
     }
 
     const runVersion = this._version;
-    const trackedDeps: Set<AnyReadable> = new Set(this._explicitDeps);
-    const collector: DependencyCollector = {
-      add: (readable: AnyReadable) => {
-        trackedDeps.add(readable);
-      },
-    };
+    const dependencyTracker = createDependencyTracker(this._explicitDeps);
 
     this._evaluating = true;
 
     try {
-      const value = withDependencyTracking(collector, this._read);
+      const value = withDependencyTracking(dependencyTracker.collector, this._read);
       this._value = value;
       this._error = undefined;
       this._promise = null;
@@ -228,32 +223,32 @@ export class DerivedImpl<T> implements Readable<T> {
       }
     } finally {
       this._evaluating = false;
-      this._bindDependencies(Array.from(trackedDeps));
+      this._bindDependencies(dependencyTracker.dependencies());
     }
   }
 
   _bindDependencies(deps: $ReadOnlyArray<AnyReadable>): void {
-    const nextDeps = uniqueReadables(deps).filter(dep => dep !== this);
+    const binding = replaceDependencySubscriptions(
+      this._deps,
+      this._depUnsubscribers,
+      deps,
+      this,
+      dep => dep.subscribe(this._onDependencyChange)
+    );
 
-    if (sameReadables(this._deps, nextDeps)) {
+    if (binding == null) {
       return;
     }
 
-    for (const unsubscribe of this._depUnsubscribers) {
-      unsubscribe();
-    }
-
-    this._deps = nextDeps;
-    this._depUnsubscribers = nextDeps.map(dep => dep.subscribe(this._onDependencyChange));
+    this._deps = binding.deps;
+    this._depUnsubscribers = binding.unsubscribers;
   }
 
   _releaseDependencies(): void {
     this._version += 1;
     this._cleanupToken += 1;
 
-    for (const unsubscribe of this._depUnsubscribers) {
-      unsubscribe();
-    }
+    unsubscribeAll(this._depUnsubscribers);
 
     this._deps = [];
     this._depUnsubscribers = [];
@@ -390,19 +385,14 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
     }
 
     const runVersion = this._version;
-    const trackedDeps: Set<AnyReadable> = new Set(this._explicitDeps);
-    const collector: DependencyCollector = {
-      add: (readable: AnyReadable) => {
-        trackedDeps.add(readable);
-      },
-    };
+    const dependencyTracker = createDependencyTracker(this._explicitDeps);
 
     let result;
 
     this._starting = true;
 
     try {
-      result = withDependencyTracking(collector, this._read);
+      result = withDependencyTracking(dependencyTracker.collector, this._read);
     } catch (error) {
       if (isPromiseLike(error)) {
         const promise = Promise.resolve(error).then(
@@ -438,14 +428,14 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
         this._promise = null;
         this._state = "rejected";
       }
-      this._bindDependencies(Array.from(trackedDeps));
+      this._bindDependencies(dependencyTracker.dependencies());
       this._starting = false;
       return;
     } finally {
       this._starting = false;
     }
 
-    this._bindDependencies(Array.from(trackedDeps));
+    this._bindDependencies(dependencyTracker.dependencies());
 
     const promise = Promise.resolve(result).then(
       value => {
@@ -478,27 +468,27 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
   }
 
   _bindDependencies(deps: $ReadOnlyArray<AnyReadable>): void {
-    const nextDeps = uniqueReadables(deps).filter(dep => dep !== this);
+    const binding = replaceDependencySubscriptions(
+      this._deps,
+      this._depUnsubscribers,
+      deps,
+      this,
+      dep => dep.subscribe(this._onDependencyChange)
+    );
 
-    if (sameReadables(this._deps, nextDeps)) {
+    if (binding == null) {
       return;
     }
 
-    for (const unsubscribe of this._depUnsubscribers) {
-      unsubscribe();
-    }
-
-    this._deps = nextDeps;
-    this._depUnsubscribers = nextDeps.map(dep => dep.subscribe(this._onDependencyChange));
+    this._deps = binding.deps;
+    this._depUnsubscribers = binding.unsubscribers;
   }
 
   _releaseDependencies(): void {
     this._version += 1;
     this._cleanupToken += 1;
 
-    for (const unsubscribe of this._depUnsubscribers) {
-      unsubscribe();
-    }
+    unsubscribeAll(this._depUnsubscribers);
 
     this._deps = [];
     this._depUnsubscribers = [];

@@ -3,20 +3,21 @@
 import { CellImpl } from "./Cell";
 import { AsyncDerivedImpl, DerivedImpl } from "./Derived";
 import {
+  cancelListeners,
   cancelPendingListener,
   clearDefaultScope,
+  createDependencyTracker,
   isPromiseLike,
   notifyListeners,
   preloadReadable,
-  sameReadables,
-  uniqueReadables,
+  replaceDependencySubscriptions,
+  unsubscribeAll,
   withDependencyTracking,
   withScope,
 } from "./Internal";
 import type {
   AnyReadable,
   Cell,
-  DependencyCollector,
   Listener,
   Readable,
   Scope,
@@ -206,32 +207,22 @@ export class ScopeImpl implements Scope {
       state.version += 1;
       state.cleanupToken += 1;
 
-      for (const unsubscribe of state.depUnsubscribers) {
-        unsubscribe();
-      }
+      unsubscribeAll(state.depUnsubscribers);
 
       state.depUnsubscribers = [];
       state.deps = [];
-      for (const listener of state.listeners) {
-        cancelPendingListener(listener);
-      }
-      state.listeners.clear();
+      cancelListeners(state.listeners);
     }
 
     for (const state of this._createdAsyncDerivedStates) {
       state.version += 1;
       state.cleanupToken += 1;
 
-      for (const unsubscribe of state.depUnsubscribers) {
-        unsubscribe();
-      }
+      unsubscribeAll(state.depUnsubscribers);
 
       state.depUnsubscribers = [];
       state.deps = [];
-      for (const listener of state.listeners) {
-        cancelPendingListener(listener);
-      }
-      state.listeners.clear();
+      cancelListeners(state.listeners);
       state.promise = null;
     }
 
@@ -239,10 +230,7 @@ export class ScopeImpl implements Scope {
       const state = this._cellStates.get(cellValue);
 
       if (state != null) {
-        for (const listener of state.listeners) {
-          cancelPendingListener(listener);
-        }
-        state.listeners.clear();
+        cancelListeners(state.listeners);
       }
     }
   }
@@ -401,17 +389,14 @@ export class ScopeImpl implements Scope {
     }
 
     const runVersion = state.version;
-    const trackedDeps: Set<AnyReadable> = new Set(derivedValue._explicitDeps);
-    const collector: DependencyCollector = {
-      add: (readable: AnyReadable) => {
-        trackedDeps.add(readable);
-      },
-    };
+    const dependencyTracker = createDependencyTracker(derivedValue._explicitDeps);
 
     state.evaluating = true;
 
     try {
-      const value = withScope(this, () => withDependencyTracking(collector, derivedValue._read));
+      const value = withScope(this, () => (
+        withDependencyTracking(dependencyTracker.collector, derivedValue._read)
+      ));
       state.value = value;
       state.error = undefined;
       state.promise = null;
@@ -453,7 +438,7 @@ export class ScopeImpl implements Scope {
       }
     } finally {
       state.evaluating = false;
-      this._bindScopedDependencies(state, Array.from(trackedDeps), derivedValue);
+      this._bindScopedDependencies(state, dependencyTracker.dependencies(), derivedValue);
     }
   }
 
@@ -461,9 +446,7 @@ export class ScopeImpl implements Scope {
     state.version += 1;
     state.cleanupToken += 1;
 
-    for (const unsubscribe of state.depUnsubscribers) {
-      unsubscribe();
-    }
+    unsubscribeAll(state.depUnsubscribers);
 
     state.deps = [];
     state.depUnsubscribers = [];
@@ -591,19 +574,16 @@ export class ScopeImpl implements Scope {
     }
 
     const runVersion = state.version;
-    const trackedDeps: Set<AnyReadable> = new Set(derivedValue._explicitDeps);
-    const collector: DependencyCollector = {
-      add: (readable: AnyReadable) => {
-        trackedDeps.add(readable);
-      },
-    };
+    const dependencyTracker = createDependencyTracker(derivedValue._explicitDeps);
 
     let result;
 
     state.starting = true;
 
     try {
-      result = withScope(this, () => withDependencyTracking(collector, derivedValue._read));
+      result = withScope(this, () => (
+        withDependencyTracking(dependencyTracker.collector, derivedValue._read)
+      ));
     } catch (error) {
       if (isPromiseLike(error)) {
         const promise = Promise.resolve(error).then(
@@ -639,14 +619,14 @@ export class ScopeImpl implements Scope {
         state.promise = null;
         state.state = "rejected";
       }
-      this._bindScopedDependencies(state, Array.from(trackedDeps), derivedValue);
+      this._bindScopedDependencies(state, dependencyTracker.dependencies(), derivedValue);
       state.starting = false;
       return;
     } finally {
       state.starting = false;
     }
 
-    this._bindScopedDependencies(state, Array.from(trackedDeps), derivedValue);
+    this._bindScopedDependencies(state, dependencyTracker.dependencies(), derivedValue);
 
     const promise = Promise.resolve(result).then(
       value => {
@@ -682,9 +662,7 @@ export class ScopeImpl implements Scope {
     state.version += 1;
     state.cleanupToken += 1;
 
-    for (const unsubscribe of state.depUnsubscribers) {
-      unsubscribe();
-    }
+    unsubscribeAll(state.depUnsubscribers);
 
     state.deps = [];
     state.depUnsubscribers = [];
@@ -714,18 +692,20 @@ export class ScopeImpl implements Scope {
     deps: $ReadOnlyArray<AnyReadable>,
     owner: AnyReadable
   ): void {
-    const nextDeps = uniqueReadables(deps).filter(dep => dep !== owner);
+    const binding = replaceDependencySubscriptions(
+      state.deps,
+      state.depUnsubscribers,
+      deps,
+      owner,
+      dep => this.subscribe(dep, state.onDependencyChange)
+    );
 
-    if (sameReadables(state.deps, nextDeps)) {
+    if (binding == null) {
       return;
     }
 
-    for (const unsubscribe of state.depUnsubscribers) {
-      unsubscribe();
-    }
-
-    state.deps = nextDeps;
-    state.depUnsubscribers = nextDeps.map(dep => this.subscribe(dep, state.onDependencyChange));
+    state.deps = binding.deps;
+    state.depUnsubscribers = binding.unsubscribers;
   }
 }
 

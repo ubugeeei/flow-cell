@@ -3,11 +3,14 @@
 import type {
   AnyReadable,
   DependencyCollector,
+  GraphEdge,
   GraphMeta,
+  GraphNode,
   GraphSnapshot,
   Listener,
   NodeOptions,
   NodeType,
+  Unsubscribe,
 } from "./Types";
 
 let nextNodeID = 1;
@@ -24,6 +27,21 @@ let activeScope: ?any = null;
 let defaultScopeStack: Array<any> = [];
 
 const MAX_PRELOAD_RETRIES = 1000;
+
+type GraphEntry = {
+  +node: GraphNode,
+  +edges: Array<GraphEdge>,
+};
+
+type DependencyTracker = {
+  +collector: DependencyCollector,
+  +dependencies: () => Array<AnyReadable>,
+};
+
+type DependencyBinding = {
+  +deps: Array<AnyReadable>,
+  +unsubscribers: Array<Unsubscribe>,
+};
 
 function compactDefaultScopeStack(): void {
   defaultScopeStack = defaultScopeStack.filter(scope => scope != null && !scope._disposed);
@@ -73,46 +91,47 @@ function getReadableID(readable: AnyReadable): ?string {
   return meta?.id;
 }
 
+function dependencyIDsFor(meta: GraphMeta, scopeImpl: ?any): Array<string> {
+  return meta.getDependencies(scopeImpl).reduce((ids, dep) => {
+    const id = getReadableID(dep);
+    return id == null ? ids : ids.concat(id);
+  }, [] as Array<string>);
+}
+
+function graphEntryForMeta(meta: GraphMeta, scopeImpl: ?any): GraphEntry {
+  const dependencies = dependencyIDsFor(meta, scopeImpl);
+  const node = {
+    id: meta.id,
+    type: meta.type,
+    label: meta.label,
+    status: meta.getStatus(scopeImpl),
+    subscribers: meta.getSubscriberCount(scopeImpl),
+    dependencies,
+  };
+  const edges: Array<GraphEdge> = dependencies.map(dependencyID => ({
+    from: dependencyID,
+    to: meta.id,
+  } as GraphEdge));
+
+  return { node, edges };
+}
+
 export function inspectGraph(scope?: mixed): GraphSnapshot {
   const scopeImpl = scope == null ? null : scope as any;
-  const nodes = [];
-  const edges = [];
-
-  for (const meta of graphMetas) {
-    const dependencies = [];
-
-    for (const dep of meta.getDependencies(scopeImpl)) {
-      const dependencyID = getReadableID(dep);
-
-      if (dependencyID != null) {
-        dependencies.push(dependencyID);
-      }
-    }
-
-    nodes.push({
-      id: meta.id,
-      type: meta.type,
-      label: meta.label,
-      status: meta.getStatus(scopeImpl),
-      subscribers: meta.getSubscriberCount(scopeImpl),
-      dependencies,
-    });
-
-    for (const dependencyID of dependencies) {
-      edges.push({
-        from: dependencyID,
-        to: meta.id,
-      });
-    }
-  }
+  const entries = Array.from(graphMetas).map(meta => graphEntryForMeta(meta, scopeImpl));
+  const nodes = entries.map(entry => entry.node);
+  const edges = entries.reduce(
+    (all, entry) => all.concat(entry.edges),
+    [] as Array<GraphEdge>
+  );
 
   return { nodes, edges };
 }
 
 export function notifyListeners(listeners: Set<Listener>): void {
-  for (const listener of Array.from(listeners)) {
+  Array.from(listeners).forEach(listener => {
     pendingListeners.add(listener);
-  }
+  });
 
   if (transactionDepth === 0) {
     flushListeners();
@@ -135,9 +154,9 @@ function flushListeners(): void {
       const batch = Array.from(pendingListeners);
       pendingListeners.clear();
 
-      for (const listener of batch) {
+      batch.forEach(listener => {
         listener();
-      }
+      });
     }
   } finally {
     flushingListeners = false;
@@ -216,31 +235,56 @@ export function clearDefaultScope(scope: any): void {
 }
 
 export function uniqueReadables(readables: $ReadOnlyArray<AnyReadable>): Array<AnyReadable> {
-  const seen: Set<AnyReadable> = new Set();
-  const result: Array<AnyReadable> = [];
-
-  for (const readable of readables) {
-    if (!seen.has(readable)) {
-      seen.add(readable);
-      result.push(readable);
-    }
-  }
-
-  return result;
+  return Array.from(new Set(readables));
 }
 
 export function sameReadables(left: $ReadOnlyArray<AnyReadable>, right: $ReadOnlyArray<AnyReadable>): boolean {
-  if (left.length !== right.length) {
-    return false;
+  return left.length === right.length && left.every((readable, index) => readable === right[index]);
+}
+
+export function createDependencyTracker(readables: $ReadOnlyArray<AnyReadable>): DependencyTracker {
+  const tracked: Set<AnyReadable> = new Set(readables);
+
+  return {
+    collector: {
+      add: readable => {
+        tracked.add(readable);
+      },
+    },
+    dependencies: () => Array.from(tracked),
+  };
+}
+
+export function unsubscribeAll(unsubscribers: $ReadOnlyArray<Unsubscribe>): void {
+  unsubscribers.forEach(unsubscribe => {
+    unsubscribe();
+  });
+}
+
+export function cancelListeners(listeners: Set<Listener>): void {
+  Array.from(listeners).forEach(cancelPendingListener);
+  listeners.clear();
+}
+
+export function replaceDependencySubscriptions(
+  currentDeps: $ReadOnlyArray<AnyReadable>,
+  currentUnsubscribers: $ReadOnlyArray<Unsubscribe>,
+  deps: $ReadOnlyArray<AnyReadable>,
+  owner: AnyReadable,
+  subscribe: (readable: AnyReadable) => Unsubscribe
+): ?DependencyBinding {
+  const nextDeps = uniqueReadables(deps).filter(dep => dep !== owner);
+
+  if (sameReadables(currentDeps, nextDeps)) {
+    return null;
   }
 
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] !== right[index]) {
-      return false;
-    }
-  }
+  unsubscribeAll(currentUnsubscribers);
 
-  return true;
+  return {
+    deps: nextDeps,
+    unsubscribers: nextDeps.map(dep => subscribe(dep)),
+  };
 }
 
 export function isPromiseLike(value: mixed): boolean {
