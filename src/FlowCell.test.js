@@ -16,7 +16,7 @@ import {
   Provider,
   preload,
   transaction,
-  use,
+  useCell,
 } from "./FlowCell";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -51,14 +51,14 @@ test("transaction batches listener notifications", () => {
   expect(listener).toHaveBeenCalledTimes(1);
 });
 
-test("use subscribes React components with useSyncExternalStore", () => {
+test("useCell subscribes React components with useSyncExternalStore", () => {
   const count = cell(0);
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
 
   function Counter() {
-    const value = use(count);
+    const value = useCell(count);
     return React.createElement("button", null, value);
   }
 
@@ -80,7 +80,7 @@ test("use subscribes React components with useSyncExternalStore", () => {
   container.remove();
 });
 
-test("use unwraps asyncDerived with React Suspense", async () => {
+test("useCell unwraps asyncDerived with React Suspense", async () => {
   const userID = cell("1", { key: "test.react.suspense.id" });
   const resolvers = [];
   const user = asyncDerived(userID, id => new Promise(resolve => {
@@ -91,7 +91,7 @@ test("use unwraps asyncDerived with React Suspense", async () => {
   const root = createRoot(container);
 
   function UserPanel() {
-    const data = use(user);
+    const data = useCell(user);
     return React.createElement("h1", null, data.name);
   }
 
@@ -239,7 +239,7 @@ test("Provider scopes reads for independent SSR requests", () => {
   const message = derived(requestID, id => `hello ${id}`, { key: "test.message" });
 
   function App() {
-    return React.createElement("p", null, use(message));
+    return React.createElement("p", null, useCell(message));
   }
 
   const firstScope = createScope();

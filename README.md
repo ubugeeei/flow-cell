@@ -4,15 +4,15 @@
 
 An experimental Flow typed state management library for React 19, built around a client state graph of cells and derived values.
 
-The core idea is deliberately small: state is a `cell`, computed state is `derived`, React reads everything through one `use` hook, and `transaction` batches writes. SSR, Suspense, and preloading exist to make that state model production-friendly in modern React; they are not a pivot into a remote resource framework.
+The core idea is deliberately small: state is a `cell`, computed state is `derived`, React reads everything through one `useCell` hook, and `transaction` batches writes. SSR, Suspense, and preloading exist to make that state model production-friendly in modern React; they are not a pivot into a remote resource framework.
 
 ```js
-import { cell, use as useFlowCell } from "flow-cell";
+import { cell, useCell } from "flow-cell";
 
 const count = cell<number>(0);
 
 hook useCount(): number {
-  return useFlowCell(count);
+  return useCell(count);
 }
 
 component Counter() {
@@ -30,13 +30,13 @@ component Counter() {
 
 - `cell(initial)` creates writable state.
 - `derived(deps, fn)` creates memoized state from other readable values.
-- `use(readable)` subscribes React with `useSyncExternalStore`.
+- `useCell(readable)` subscribes React with `useSyncExternalStore`.
 - `transaction(fn)` batches notifications.
 - `preload(readable, scope?)` warms Suspense resources before render.
 - `createScope()` creates an isolated state graph for SSR requests or app roots.
 
 ```js
-import { cell, derived, use as useFlowCell } from "flow-cell";
+import { cell, derived, useCell } from "flow-cell";
 
 const query = cell<string>("");
 const posts = cell<Array<Post>>([]);
@@ -46,8 +46,8 @@ const filteredPosts = derived([query, posts], (q, allPosts) =>
 );
 
 component Search() {
-  const q = useFlowCell(query);
-  const results = useFlowCell(filteredPosts);
+  const q = useCell(query);
+  const results = useCell(filteredPosts);
 
   return (
     <>
@@ -70,11 +70,11 @@ FlowCell is a state management library first. The graph is client state by defau
 
 ## Suspense
 
-FlowCell assumes React 19, Async React, and Suspense. `asyncDerived` stores a pending thenable, FlowCell's `use` subscribes with `useSyncExternalStore`, and then unwraps that thenable with React 19's `use`. Pending work suspends; rejected work flows to an error boundary.
+FlowCell assumes React 19, Async React, and Suspense. `asyncDerived` stores a pending thenable, FlowCell's `useCell` subscribes with `useSyncExternalStore`, and then unwraps that thenable with React 19's `use`. Pending work suspends; rejected work flows to an error boundary.
 
 ```js
 import * as React from "react";
-import { asyncDerived, cell, preload, use as useFlowCell } from "flow-cell";
+import { asyncDerived, cell, preload, useCell } from "flow-cell";
 
 type User = {
   +id: string,
@@ -88,7 +88,7 @@ const user = asyncDerived(userID, async id => {
 });
 
 hook useUser(): User {
-  return useFlowCell(user);
+  return useCell(user);
 }
 
 component UserPanel() {
@@ -107,19 +107,19 @@ component App() {
 await preload(user);
 ```
 
-React's own `use` cannot subscribe to arbitrary external stores directly; it accepts thenables and contexts. FlowCell's `use` is the state graph hook that performs the external-store subscription, then delegates pending async values to React's `use`.
+React's own `use` cannot subscribe to arbitrary external stores directly; it accepts thenables and contexts. FlowCell's `useCell` is the state graph hook that performs the external-store subscription, then delegates pending async values to React's `use`.
 
 ## SSR scopes
 
-Use a fresh `Scope` per request so module-level cells do not leak state between users. `Provider` makes `use(cell)` and `use(derivedValue)` read from that scope.
+Use a fresh `Scope` per request so module-level cells do not leak state between users. `Provider` makes `useCell(cell)` and `useCell(derivedValue)` read from that scope.
 
 ```js
-import { Provider, createScope, dehydrate, hydrate, use as useFlowCell } from "flow-cell";
+import { Provider, createScope, dehydrate, hydrate, useCell } from "flow-cell";
 
 const userID = cell<string>("anonymous", { key: "userID" });
 
 component App() {
-  const id = useFlowCell(userID);
+  const id = useCell(userID);
   return <h1>{id}</h1>;
 }
 

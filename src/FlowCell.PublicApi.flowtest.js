@@ -10,7 +10,7 @@ import {
   keyed,
   preload,
   transaction,
-  use as useFlowCell,
+  useCell,
 } from "flow-cell";
 import type { Cell, Derived, Scope } from "flow-cell";
 
@@ -37,7 +37,7 @@ transaction(() => {
 });
 
 hook useCountValue(): number {
-  const value: number = useFlowCell(count);
+  const value: number = useCell(count);
   return value;
 }
 

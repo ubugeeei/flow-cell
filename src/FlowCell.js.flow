@@ -100,4 +100,4 @@ declare export function preload<T>(readable: Readable<T>, scope?: Scope): Promis
 declare export function transaction(fn: () => void): void;
 declare export function keyed<K, R>(factory: (key: K) => R, options?: { +key?: (key: K) => string }): Keyed<K, R>;
 declare export function inspectGraph(scope?: Scope): GraphSnapshot;
-declare export function use<T>(readable: Readable<T>): T;
+declare export function useCell<T>(readable: Readable<T>): T;

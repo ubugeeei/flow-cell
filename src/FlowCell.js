@@ -36,6 +36,6 @@ export {
 } from "./FlowCell.Scope";
 export {
   Provider,
-  use,
+  useCell,
 } from "./FlowCell.React";
 export { keyed } from "./FlowCell.Keyed";

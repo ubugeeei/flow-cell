@@ -82,7 +82,7 @@ export function Provider(props: ProviderProps): React.Node {
   );
 }
 
-export function use<T>(readable: Readable<T>): T {
+export function useCell<T>(readable: Readable<T>): T {
   const scope = React.useContext(ScopeContext);
   const subscribe = React.useCallback(
     (listener: Listener) => {
