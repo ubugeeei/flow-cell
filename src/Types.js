@@ -22,6 +22,7 @@ export type Getter = <T>(readable: Readable<T>) => T;
 export type NodeOptions = {
   +key?: string,
   +name?: string,
+  +serialize?: boolean,
 };
 
 export type ScopeSnapshot = {

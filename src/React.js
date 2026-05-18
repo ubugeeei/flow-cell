@@ -4,7 +4,7 @@
 
 import * as React from "react";
 import {
-  getDefaultScope,
+  clearDefaultScope,
   isPromiseLike,
   setDefaultScope,
 } from "./Internal";
@@ -66,13 +66,10 @@ export function Provider(props: ProviderProps): React.Node {
       return undefined;
     }
 
-    const previousScope = getDefaultScope();
     setDefaultScope(scope);
 
     return () => {
-      if (getDefaultScope() === scope) {
-        setDefaultScope(previousScope == null || previousScope._disposed ? null : previousScope);
-      }
+      clearDefaultScope(scope);
     };
   }, [scope, setAsDefault]);
 

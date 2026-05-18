@@ -35,11 +35,22 @@ type NormalizedDerivation<T> = {
   +options: ?NodeOptions,
 };
 
-function createGetter(): Getter {
-  return (<T>(readable: Readable<T>): T => {
+function runWithGetter<T>(fn: (get: Getter) => T): T {
+  let active = true;
+  const getter: Getter = (<Value>(readable: Readable<Value>): Value => {
+    if (!active) {
+      throw new Error("FlowCell getter can only be used synchronously during derived computation.");
+    }
+
     trackReadable(readable);
     return readable.get();
   });
+
+  try {
+    return fn(getter);
+  } finally {
+    active = false;
+  }
 }
 
 function normalizeDerivation<T>(
@@ -50,7 +61,7 @@ function normalizeDerivation<T>(
   if (typeof depsOrFn === "function" && typeof maybeFn !== "function") {
     return {
       explicitDeps: [],
-      read: () => (depsOrFn as any)(createGetter()),
+      read: () => runWithGetter(depsOrFn as any),
       options: maybeFn ?? options,
     };
   }
@@ -130,7 +141,9 @@ export class DerivedImpl<T> implements Readable<T> {
     }
 
     if (this._state === "error") {
-      throw this._error;
+      const error = this._error;
+      this._scheduleUnobservedRelease();
+      throw error;
     }
 
     const value = this._value as T;
@@ -330,7 +343,9 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
     }
 
     if (this._state === "rejected") {
-      throw this._error;
+      const error = this._error;
+      this._scheduleUnobservedRelease();
+      throw error;
     }
 
     if (this._state === "idle") {
@@ -342,7 +357,9 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
     }
 
     if (this._state === "rejected") {
-      throw this._error;
+      const error = this._error;
+      this._scheduleUnobservedRelease();
+      throw error;
     }
 
     throw this._promise;

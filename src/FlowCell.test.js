@@ -241,6 +241,23 @@ test("derived releases unobserved global reads after the current turn", async ()
   expect(doubled.get()).toBe(4);
 });
 
+test("derived releases unobserved dependencies after errors", async () => {
+  const source = cell("secret", { key: "test.unobserved.error.source" });
+  const broken = derived(get => {
+    get(source);
+    throw new Error("boom");
+  }, { key: "test.unobserved.error.broken" });
+
+  expect(() => broken.get()).toThrow("boom");
+  expect(inspectGraph().nodes.find(node => node.id === "test.unobserved.error.broken").dependencies).toEqual([
+    "test.unobserved.error.source",
+  ]);
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  expect(inspectGraph().nodes.find(node => node.id === "test.unobserved.error.broken").dependencies).toEqual([]);
+});
+
 test("scoped derived values release dependencies when no subscribers remain", () => {
   const source = cell(1, { key: "test.scoped.release.source" });
   const doubled = derived(get => get(source) * 2, { key: "test.scoped.release.doubled" });
@@ -344,6 +361,23 @@ test("asyncDerived waits on async dependencies without entering an error state",
   await expect(preload(message)).resolves.toBe("ready!");
 });
 
+test("asyncDerived releases unobserved dependencies after rejections", async () => {
+  const source = cell("secret", { key: "test.async.reject.source" });
+  const broken = asyncDerived(async get => {
+    get(source);
+    throw new Error("boom");
+  }, { key: "test.async.reject.broken" });
+
+  await expect(preload(broken)).rejects.toThrow("boom");
+  expect(inspectGraph().nodes.find(node => node.id === "test.async.reject.broken").dependencies).toEqual([
+    "test.async.reject.source",
+  ]);
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  expect(inspectGraph().nodes.find(node => node.id === "test.async.reject.broken").dependencies).toEqual([]);
+});
+
 test("derived reports cyclic dependencies instead of overflowing the stack", () => {
   let first;
   let second;
@@ -372,8 +406,8 @@ test("inspectGraph exposes serializable nodes and dependency edges", () => {
   });
 });
 
-test("dehydrate and hydrate preserve scoped cell values", () => {
-  const theme = cell("light", { key: "test.theme" });
+test("dehydrate and hydrate preserve serializable scoped cell values", () => {
+  const theme = cell("light", { key: "test.theme", serialize: true });
 
   const serverScope = createScope();
   serverScope.set(theme, "dark");
@@ -430,6 +464,48 @@ test("scope.bind returns stable readable wrappers for explicit multi-root writes
   expect(count.get()).toBe(0);
 });
 
+test("Provider default scopes do not restore unmounted roots", () => {
+  const count = cell(0, { key: "test.default.scope.stack" });
+  const firstScope = createScope();
+  const secondScope = createScope();
+  const firstContainer = document.createElement("div");
+  const secondContainer = document.createElement("div");
+  document.body.appendChild(firstContainer);
+  document.body.appendChild(secondContainer);
+  const firstRoot = createRoot(firstContainer);
+  const secondRoot = createRoot(secondContainer);
+
+  act(() => {
+    firstRoot.render(React.createElement(Provider, { scope: firstScope }, null));
+  });
+  act(() => {
+    secondRoot.render(React.createElement(Provider, { scope: secondScope }, null));
+  });
+
+  act(() => {
+    count.set(1);
+  });
+
+  expect(secondScope.get(count)).toBe(1);
+
+  act(() => {
+    firstRoot.unmount();
+  });
+  act(() => {
+    secondRoot.unmount();
+  });
+  act(() => {
+    count.set(2);
+  });
+
+  expect(count.get()).toBe(2);
+  expect(firstScope.get(count)).toBe(0);
+  expect(secondScope.get(count)).toBe(1);
+
+  firstContainer.remove();
+  secondContainer.remove();
+});
+
 test("scope.run executes module-level writes against that scope", () => {
   const count = cell(0, { key: "test.scope.run.count" });
   const scope = createScope();
@@ -473,19 +549,59 @@ test("scope.dispose clears subscriptions and prevents later use", () => {
   expect(() => scope.set(count, 1)).toThrow("disposed");
 });
 
-test("dehydrate only includes cells touched by the scope", () => {
-  const touched = cell("yes", { key: "test.snapshot.touched" });
-  cell("no", { key: "test.snapshot.untouched" });
+test("dehydrate only includes serializable cells touched by the scope", () => {
+  const touched = cell("yes", { key: "test.snapshot.touched", serialize: true });
+  const secret = cell("token", { key: "test.snapshot.secret" });
+  cell("no", { key: "test.snapshot.untouched", serialize: true });
   const scope = createScope();
 
   scope.set(touched, "changed");
+  scope.set(secret, "changed-secret");
 
-  expect(dehydrate(scope)).toEqual({
-    version: 1,
-    cells: {
-      "test.snapshot.touched": "changed",
+  const snapshot = dehydrate(scope);
+  expect(snapshot.version).toBe(1);
+  expect(Object.keys(snapshot.cells)).toEqual(["test.snapshot.touched"]);
+  expect((snapshot.cells: any)["test.snapshot.touched"]).toBe("changed");
+});
+
+test("serializable cells require stable keys", () => {
+  expect(() => cell("secret", { serialize: true })).toThrow("stable key");
+});
+
+test("hydrate handles prototype-shaped snapshot keys as data", () => {
+  const proto = cell("safe", { key: "__proto__", serialize: true });
+  const snapshot = JSON.parse("{\"version\":1,\"cells\":{\"__proto__\":{\"polluted\":true}}}");
+  const scope = hydrate((snapshot: any));
+
+  expect(scope.get(proto)).toEqual({ polluted: true });
+  expect(({}: any).polluted).toBe(undefined);
+
+  const dehydrated = dehydrate(scope);
+  expect(Object.prototype.hasOwnProperty.call(dehydrated.cells, "__proto__")).toBe(true);
+  expect((dehydrated.cells: any).__proto__).toEqual({ polluted: true });
+});
+
+test("asyncDerived rejects getter reads after async boundaries", async () => {
+  const secret = cell("secret", { key: "test.async.getter.secret" });
+  const unsafe = asyncDerived(async get => {
+    await Promise.resolve();
+    return get(secret);
+  }, { key: "test.async.getter.unsafe" });
+
+  await expect(preload(unsafe)).rejects.toThrow("synchronously");
+});
+
+test("preload rejects readables that repeatedly suspend without settling", async () => {
+  const neverSettled = {
+    get() {
+      throw Promise.resolve();
     },
-  });
+    subscribe() {
+      return () => {};
+    },
+  };
+
+  await expect(preload((neverSettled: any))).rejects.toThrow("retry limit");
 });
 
 test("asyncDerived ignores stale async results after dependencies change", async () => {

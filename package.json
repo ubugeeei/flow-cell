@@ -34,7 +34,7 @@
     "flow": "flow check",
     "prepare": "node Build.js",
     "smoke": "node Smoke.js",
-    "test": "jest --config Jest.config.cjs",
+    "test": "node Test.js",
     "verify": "yarn flow && yarn test && yarn build && yarn smoke"
   },
   "keywords": [
@@ -66,11 +66,9 @@
     "@babel/core": "^7.29.0",
     "@babel/plugin-transform-modules-commonjs": "^7.28.6",
     "@babel/preset-flow": "^7.27.1",
-    "babel-jest": "^30.4.1",
     "babel-plugin-syntax-hermes-parser": "^0.36.1",
     "flow-bin": "^0.314.0",
-    "jest": "^30.4.2",
-    "jest-environment-jsdom": "^30.4.1",
+    "happy-dom": "^20.9.0",
     "react": "^19.2.6",
     "react-dom": "^19.2.6"
   }

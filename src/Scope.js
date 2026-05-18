@@ -28,6 +28,14 @@ function defer(fn: () => void): void {
   setTimeout(fn, 0);
 }
 
+function createCellRecord(): { [string]: mixed } {
+  return Object.create(null) as any;
+}
+
+function hasOwnCell(record: { [string]: mixed }, id: string): boolean {
+  return Object.hasOwn(record, id);
+}
+
 type ScopedCellState<T> = {
   value: T,
   listeners: Set<Listener>,
@@ -73,15 +81,24 @@ export class ScopeImpl implements Scope {
   _disposed: boolean = false;
 
   constructor(snapshot?: ScopeSnapshot): void {
-    this._snapshotCells = {};
+    this._snapshotCells = createCellRecord();
 
     if (snapshot != null) {
       if (snapshot.version != null && snapshot.version !== 1) {
         throw new Error(`Unsupported FlowCell snapshot version: ${String(snapshot.version)}`);
       }
 
-      for (const id of Object.keys(snapshot.cells)) {
-        this._snapshotCells[id] = snapshot.cells[id];
+      if (
+        snapshot.cells == null ||
+        typeof snapshot.cells !== "object" ||
+        Array.isArray(snapshot.cells)
+      ) {
+        throw new Error("FlowCell snapshot cells must be an object.");
+      }
+
+      const snapshotCells = snapshot.cells;
+      for (const id of Object.keys(snapshotCells)) {
+        this._snapshotCells[id] = (snapshotCells as any)[id];
       }
     }
   }
@@ -164,9 +181,13 @@ export class ScopeImpl implements Scope {
   snapshot(): ScopeSnapshot {
     this._assertActive();
 
-    const cells: { [string]: mixed } = {};
+    const cells: { [string]: mixed } = createCellRecord();
 
     for (const cellValue of this._touchedCells) {
+      if (!cellValue._serializable) {
+        continue;
+      }
+
       cells[cellValue._meta.id] = this._getCell(cellValue);
     }
 
@@ -270,7 +291,7 @@ export class ScopeImpl implements Scope {
     }
 
     const id = cellValue._meta.id;
-    const hasSnapshotValue = Object.keys(this._snapshotCells).includes(id);
+    const hasSnapshotValue = hasOwnCell(this._snapshotCells, id);
     const value = hasSnapshotValue
       ? this._snapshotCells[id]
       : cellValue._getInitial();
@@ -300,7 +321,9 @@ export class ScopeImpl implements Scope {
     }
 
     if (state.state === "error") {
-      throw state.error;
+      const error = state.error;
+      this._scheduleScopedDerivedRelease(state);
+      throw error;
     }
 
     const value = state.value as T;
@@ -478,7 +501,9 @@ export class ScopeImpl implements Scope {
     }
 
     if (state.state === "rejected") {
-      throw state.error;
+      const error = state.error;
+      this._scheduleScopedAsyncDerivedRelease(state);
+      throw error;
     }
 
     if (state.state === "idle") {
@@ -490,7 +515,9 @@ export class ScopeImpl implements Scope {
     }
 
     if (state.state === "rejected") {
-      throw state.error;
+      const error = state.error;
+      this._scheduleScopedAsyncDerivedRelease(state);
+      throw error;
     }
 
     throw state.promise;
