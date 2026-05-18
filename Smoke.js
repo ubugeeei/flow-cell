@@ -4,13 +4,13 @@ const { pathToFileURL } = require("url");
 
 async function main() {
   const root = __dirname;
-  const flowTypes = path.join(root, "Flowcell.js.flow");
+  const flowTypes = path.join(root, "dist", "FlowCell.js.flow");
 
   if (!fs.existsSync(flowTypes)) {
-    throw new Error("Missing Flowcell.js.flow");
+    throw new Error("Missing dist/FlowCell.js.flow");
   }
 
-  const cjs = require(path.join(root, "Flowcell.js"));
+  const cjs = require(path.join(root, "dist", "FlowCell.js"));
   const cjsCell = cjs.cell(1, { key: "smoke.cjs" });
   cjsCell.update(value => value + 1);
 
@@ -18,7 +18,7 @@ async function main() {
     throw new Error("CJS smoke failed");
   }
 
-  const esm = await import(pathToFileURL(path.join(root, "Flowcell.mjs")).href);
+  const esm = await import(pathToFileURL(path.join(root, "dist", "FlowCell.mjs")).href);
   const esmCell = esm.cell("a", { key: "smoke.esm" });
   const scope = esm.createScope();
   scope.set(esmCell, "b");

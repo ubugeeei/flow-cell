@@ -1,8 +1,9 @@
 /* @flow */
 
 import * as React from "react";
+import { act } from "react";
+import { createRoot } from "react-dom/client";
 import ReactDOMServer from "react-dom/server";
-import TestRenderer, { act } from "react-test-renderer";
 import {
   asyncDerived,
   cell,
@@ -16,7 +17,9 @@ import {
   preload,
   transaction,
   use,
-} from "./Flowcell";
+} from "./FlowCell";
+
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 test("cell stores writable state", () => {
   const count = cell(0);
@@ -50,25 +53,88 @@ test("transaction batches listener notifications", () => {
 
 test("use subscribes React components with useSyncExternalStore", () => {
   const count = cell(0);
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
 
   function Counter() {
     const value = use(count);
     return React.createElement("button", null, value);
   }
 
-  let renderer;
-
   act(() => {
-    renderer = TestRenderer.create(React.createElement(Counter));
+    root.render(React.createElement(Counter));
   });
 
-  expect(renderer.toJSON().children).toEqual(["0"]);
+  expect(container.textContent).toBe("0");
 
   act(() => {
     count.update(value => value + 1);
   });
 
-  expect(renderer.toJSON().children).toEqual(["1"]);
+  expect(container.textContent).toBe("1");
+
+  act(() => {
+    root.unmount();
+  });
+  container.remove();
+});
+
+test("use unwraps asyncDerived with React Suspense", async () => {
+  const userID = cell("1", { key: "test.react.suspense.id" });
+  const resolvers = [];
+  const user = asyncDerived(userID, id => new Promise(resolve => {
+    resolvers.push(() => resolve({ id, name: `User ${id}` }));
+  }), { key: "test.react.suspense.user" });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  function UserPanel() {
+    const data = use(user);
+    return React.createElement("h1", null, data.name);
+  }
+
+  await act(async () => {
+    root.render(
+      React.createElement(
+        React.Suspense,
+        { fallback: React.createElement("span", null, "Loading") },
+        React.createElement(UserPanel)
+      )
+    );
+    await Promise.resolve();
+  });
+
+  expect(container.textContent).toContain("Loading");
+
+  await act(async () => {
+    resolvers[0]();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(container.textContent).toBe("User 1");
+
+  await act(async () => {
+    userID.set("2");
+    await Promise.resolve();
+  });
+
+  expect(container.textContent).toContain("Loading");
+
+  await act(async () => {
+    resolvers[1]();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+
+  expect(container.textContent).toBe("User 2");
+
+  act(() => {
+    root.unmount();
+  });
+  container.remove();
 });
 
 test("derived reads explicit dependencies", () => {
@@ -285,5 +351,5 @@ test("preload resolves asyncDerived before render reads", async () => {
 });
 
 test("hydrate rejects unsupported snapshot versions", () => {
-  expect(() => hydrate(({ version: 999, cells: {} }: any))).toThrow("Unsupported flowcell snapshot version");
+  expect(() => hydrate(({ version: 999, cells: {} }: any))).toThrow("Unsupported FlowCell snapshot version");
 });

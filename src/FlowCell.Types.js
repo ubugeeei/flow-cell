@@ -1,5 +1,7 @@
 /* @flow strict */
 
+import type * as React from "react";
+
 export type Listener = () => void;
 export type Unsubscribe = () => void;
 
@@ -39,14 +41,17 @@ export interface Scope {
 }
 
 export type ProviderProps = {
-  +children?: React$Node,
+  +children?: React.Node,
   +scope: Scope,
   +setAsDefault?: boolean,
 };
 
+export type NodeType = "cell" | "derived" | "asyncDerived";
+export type AnyReadable = Readable<any>;
+
 export type GraphNode = {
   +id: string,
-  +type: "cell" | "derived" | "asyncDerived",
+  +type: NodeType,
   +label: string,
   +status: string,
   +subscribers: number,
@@ -61,6 +66,20 @@ export type GraphEdge = {
 export type GraphSnapshot = {
   +nodes: $ReadOnlyArray<GraphNode>,
   +edges: $ReadOnlyArray<GraphEdge>,
+};
+
+export type GraphMeta = {
+  +readable: AnyReadable,
+  +id: string,
+  +type: NodeType,
+  +label: string,
+  +getStatus: (scope: ?any) => string,
+  +getSubscriberCount: (scope: ?any) => number,
+  +getDependencies: (scope: ?any) => $ReadOnlyArray<AnyReadable>,
+};
+
+export type DependencyCollector = {
+  +add: (readable: AnyReadable) => void,
 };
 
 export type DerivedFactory = {
@@ -88,16 +107,3 @@ export type Keyed<K, R> = {
   +clear: (key?: K) => void,
   +keys: () => $ReadOnlyArray<string>,
 };
-
-declare export function cell<T>(initial: T, options?: NodeOptions): Cell<T>;
-declare export var derived: DerivedFactory;
-declare export var asyncDerived: AsyncDerivedFactory;
-declare export function createScope(snapshot?: ScopeSnapshot): Scope;
-declare export function dehydrate(scope: Scope): ScopeSnapshot;
-declare export function hydrate(snapshot: ScopeSnapshot): Scope;
-declare export function Provider(props: ProviderProps): React$Node;
-declare export function preload<T>(readable: Readable<T>, scope?: Scope): Promise<T>;
-declare export function transaction(fn: () => void): void;
-declare export function keyed<K, R>(factory: (key: K) => R, options?: { +key?: (key: K) => string }): Keyed<K, R>;
-declare export function inspectGraph(scope?: Scope): GraphSnapshot;
-declare export function use<T>(readable: Readable<T>): T;

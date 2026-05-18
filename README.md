@@ -1,18 +1,22 @@
-# flowcell
+# FlowCell
 
-> Experimental: flowcell is an early, experimental state library. APIs and behavior may change while the graph model settles.
+> Experimental: FlowCell is an early, experimental state library. APIs and behavior may change while the graph model settles.
 
-An experimental Flow typed state management library for React, built around a client state graph of cells and derived values.
+An experimental Flow typed state management library for React 19, built around a client state graph of cells and derived values.
 
 The core idea is deliberately small: state is a `cell`, computed state is `derived`, React reads everything through one `use` hook, and `transaction` batches writes. SSR, Suspense, and preloading exist to make that state model production-friendly in modern React; they are not a pivot into a remote resource framework.
 
 ```js
-import { cell, use } from "flowcell";
+import { cell, use as useFlowCell } from "flow-cell";
 
-const count = cell(0);
+const count = cell<number>(0);
 
-function Counter() {
-  const value = use(count);
+hook useCount(): number {
+  return useFlowCell(count);
+}
+
+component Counter() {
+  const value = useCount();
 
   return (
     <button onClick={() => count.update(n => n + 1)}>
@@ -32,12 +36,26 @@ function Counter() {
 - `createScope()` creates an isolated state graph for SSR requests or app roots.
 
 ```js
-const query = cell("");
-const posts = cell([]);
+import { cell, derived, use as useFlowCell } from "flow-cell";
+
+const query = cell<string>("");
+const posts = cell<Array<Post>>([]);
 
 const filteredPosts = derived([query, posts], (q, allPosts) =>
   allPosts.filter(post => post.title.includes(q))
 );
+
+component Search() {
+  const q = useFlowCell(query);
+  const results = useFlowCell(filteredPosts);
+
+  return (
+    <>
+      <input value={q} onChange={event => query.set(event.currentTarget.value)} />
+      <PostList posts={results} />
+    </>
+  );
+}
 ```
 
 `derived` also supports read tracking:
@@ -48,35 +66,60 @@ const fullName = derived(() => `${firstName.get()} ${lastName.get()}`);
 
 ## Philosophy
 
-flowcell is a state management library first. The graph is client state by default: cells hold writable application state, derived nodes model synchronous or Suspense-backed computed state, and scopes isolate that graph per request or app root. Remote data, Relay-style resources, and server cache orchestration can layer on later without becoming the center of the API.
+FlowCell is a state management library first. The graph is client state by default: cells hold writable application state, derived nodes model synchronous or Suspense-backed computed state, and scopes isolate that graph per request or app root. Remote data, Relay-style resources, and server cache orchestration can layer on later without becoming the center of the API.
 
 ## Suspense
 
-`asyncDerived` throws its pending promise from `get()`, so `use(resource)` works with Suspense and rejected promises flow to an error boundary.
+FlowCell assumes React 19, Async React, and Suspense. `asyncDerived` stores a pending thenable, FlowCell's `use` subscribes with `useSyncExternalStore`, and then unwraps that thenable with React 19's `use`. Pending work suspends; rejected work flows to an error boundary.
 
 ```js
-import { asyncDerived, cell, preload } from "flowcell";
+import * as React from "react";
+import { asyncDerived, cell, preload, use as useFlowCell } from "flow-cell";
 
-const userID = cell("1");
+type User = {
+  +id: string,
+  +name: string,
+};
+
+const userID = cell<string>("1");
 
 const user = asyncDerived(userID, async id => {
   return await fetchUser(id);
 });
 
+hook useUser(): User {
+  return useFlowCell(user);
+}
+
+component UserPanel() {
+  const data = useUser();
+  return <h1>{data.name}</h1>;
+}
+
+component App() {
+  return (
+    <React.Suspense fallback={<span>Loading...</span>}>
+      <UserPanel />
+    </React.Suspense>
+  );
+}
+
 await preload(user);
 ```
+
+React's own `use` cannot subscribe to arbitrary external stores directly; it accepts thenables and contexts. FlowCell's `use` is the state graph hook that performs the external-store subscription, then delegates pending async values to React's `use`.
 
 ## SSR scopes
 
 Use a fresh `Scope` per request so module-level cells do not leak state between users. `Provider` makes `use(cell)` and `use(derivedValue)` read from that scope.
 
 ```js
-import { Provider, createScope, dehydrate, hydrate } from "flowcell";
+import { Provider, createScope, dehydrate, hydrate, use as useFlowCell } from "flow-cell";
 
-const userID = cell("anonymous", { key: "userID" });
+const userID = cell<string>("anonymous", { key: "userID" });
 
-function App() {
-  const id = use(userID);
+component App() {
+  const id = useFlowCell(userID);
   return <h1>{id}</h1>;
 }
 
@@ -117,13 +160,13 @@ scope.dispose();
 
 ## Package Shape
 
-Source lives in `src/Flowcell.js` with Flow declarations in `src/Flowcell.js.flow`. Published artifacts are flat at the package root:
+Source lives in `src/` with module-prefixed files such as `FlowCell.Cell.js`, `FlowCell.Scope.js`, and `FlowCell.React.js`. `yarn build` generates publishable artifacts in `dist/`:
 
-- `Flowcell.js` for CommonJS
-- `Flowcell.mjs` for ESM
-- `Flowcell.js.flow` for Flow consumers
+- `dist/FlowCell.js` for CommonJS
+- `dist/FlowCell.mjs` for ESM
+- `dist/FlowCell.js.flow` for Flow consumers
 
-Use Yarn for development:
+Use the committed Yarn 4 release for development:
 
 ```sh
 yarn install

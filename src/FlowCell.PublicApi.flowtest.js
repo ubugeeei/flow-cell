@@ -1,5 +1,6 @@
 /* @flow strict */
 
+import type * as React from "react";
 import {
   Provider,
   asyncDerived,
@@ -9,9 +10,9 @@ import {
   keyed,
   preload,
   transaction,
-  use,
-} from "./Flowcell";
-import type { Cell, Derived, Scope } from "./Flowcell";
+  use as useFlowCell,
+} from "flow-cell";
+import type { Cell, Derived, Scope } from "flow-cell";
 
 const count: Cell<number> = cell(0, { key: "flowtest.count" });
 const doubled: Derived<number> = derived(count, value => value * 2);
@@ -35,15 +36,23 @@ transaction(() => {
   count.update(value => value + readNumber);
 });
 
-function CounterValue(): number {
-  const value: number = use(count);
+hook useCountValue(): number {
+  const value: number = useFlowCell(count);
   return value;
 }
 
-const node: React$Node = Provider({ scope, children: null });
+component CounterValue() {
+  const value = useCountValue();
+  return <span>{value}</span>;
+}
+
+const node: React.Node = (
+  <Provider scope={scope}>
+    <CounterValue />
+  </Provider>
+);
 
 void resource;
 void readString;
 void loaded;
 void node;
-void CounterValue;

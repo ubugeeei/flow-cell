@@ -2,6 +2,16 @@ node_modules/
 dist/
 coverage/
 .flow/
+.pnp.*
+.yarn/*
+!.yarn/releases/
+!.yarn/releases/**
+Flowcell.js
+Flowcell.mjs
+Flowcell.js.flow
+FlowCell.js
+FlowCell.mjs
+FlowCell.js.flow
 .DS_Store
 package-lock.json
 *.tgz
