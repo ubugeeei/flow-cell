@@ -1,7 +1,9 @@
 /* @flow strict */
 
 import {
+  cancelPendingListener,
   currentScope,
+  isPromiseLike,
   notifyListeners,
   registerReadable,
   sameReadables,
@@ -22,6 +24,10 @@ import type {
   Readable,
   Unsubscribe,
 } from "./Types";
+
+function defer(fn: () => void): void {
+  setTimeout(fn, 0);
+}
 
 type NormalizedDerivation<T> = {
   +explicitDeps: Array<AnyReadable>,
@@ -71,9 +77,13 @@ export class DerivedImpl<T> implements Readable<T> {
   _deps: Array<AnyReadable> = [];
   _depUnsubscribers: Array<Unsubscribe> = [];
   _listeners: Set<Listener> = new Set();
-  _state: "dirty" | "value" | "error" = "dirty";
+  _state: "dirty" | "pending" | "value" | "error" = "dirty";
   _value: any;
   _error: any;
+  _promise: ?Promise<mixed>;
+  _version: number = 0;
+  _evaluating: boolean = false;
+  _cleanupToken: number = 0;
   _onDependencyChange: Listener;
   _meta: GraphMeta;
 
@@ -82,8 +92,11 @@ export class DerivedImpl<T> implements Readable<T> {
     this._explicitDeps = derivation.explicitDeps;
     this._onDependencyChange = () => {
       if (this._state !== "dirty") {
+        this._version += 1;
         this._state = "dirty";
+        this._promise = null;
         notifyListeners(this._listeners);
+        this._scheduleUnobservedRelease();
       }
     };
     this._meta = registerReadable(
@@ -104,15 +117,25 @@ export class DerivedImpl<T> implements Readable<T> {
       return scope._getDerived(this);
     }
 
+    if (this._evaluating) {
+      throw new Error("FlowCell derived cycle detected.");
+    }
+
     if (this._state === "dirty") {
       this._evaluate();
+    }
+
+    if (this._state === "pending") {
+      throw this._promise;
     }
 
     if (this._state === "error") {
       throw this._error;
     }
 
-    return this._value as T;
+    const value = this._value as T;
+    this._scheduleUnobservedRelease();
+    return value;
   }
 
   subscribe(listener: Listener): Unsubscribe {
@@ -121,10 +144,12 @@ export class DerivedImpl<T> implements Readable<T> {
       return scope._subscribeDerived(this, listener);
     }
 
+    this._cleanupToken += 1;
     this._listeners.add(listener);
 
     return () => {
       this._listeners.delete(listener);
+      cancelPendingListener(listener);
 
       if (this._listeners.size === 0) {
         this._releaseDependencies();
@@ -133,6 +158,11 @@ export class DerivedImpl<T> implements Readable<T> {
   }
 
   _evaluate(): void {
+    if (this._evaluating) {
+      throw new Error("FlowCell derived cycle detected.");
+    }
+
+    const runVersion = this._version;
     const trackedDeps: Set<AnyReadable> = new Set(this._explicitDeps);
     const collector: DependencyCollector = {
       add: (readable: AnyReadable) => {
@@ -140,15 +170,51 @@ export class DerivedImpl<T> implements Readable<T> {
       },
     };
 
+    this._evaluating = true;
+
     try {
       const value = withDependencyTracking(collector, this._read);
       this._value = value;
       this._error = undefined;
+      this._promise = null;
       this._state = "value";
     } catch (error) {
-      this._error = error;
-      this._state = "error";
+      if (isPromiseLike(error)) {
+        const promise = Promise.resolve(error).then(
+          () => {
+            if (this._version === runVersion && this._state === "pending") {
+              this._state = "dirty";
+              this._promise = null;
+              notifyListeners(this._listeners);
+              this._scheduleUnobservedRelease();
+            }
+
+            return undefined;
+          },
+          thrown => {
+            if (this._version === runVersion && this._state === "pending") {
+              this._error = thrown;
+              this._promise = null;
+              this._state = "error";
+              notifyListeners(this._listeners);
+              this._scheduleUnobservedRelease();
+            }
+
+            return undefined;
+          }
+        );
+
+        this._value = undefined;
+        this._error = undefined;
+        this._promise = promise;
+        this._state = "pending";
+      } else {
+        this._error = error;
+        this._promise = null;
+        this._state = "error";
+      }
     } finally {
+      this._evaluating = false;
       this._bindDependencies(Array.from(trackedDeps));
     }
   }
@@ -169,6 +235,9 @@ export class DerivedImpl<T> implements Readable<T> {
   }
 
   _releaseDependencies(): void {
+    this._version += 1;
+    this._cleanupToken += 1;
+
     for (const unsubscribe of this._depUnsubscribers) {
       unsubscribe();
     }
@@ -178,6 +247,22 @@ export class DerivedImpl<T> implements Readable<T> {
     this._state = "dirty";
     this._value = undefined;
     this._error = undefined;
+    this._promise = null;
+  }
+
+  _scheduleUnobservedRelease(): void {
+    if (this._listeners.size !== 0 || this._state === "pending") {
+      return;
+    }
+
+    const cleanupToken = this._cleanupToken + 1;
+    this._cleanupToken = cleanupToken;
+
+    defer(() => {
+      if (this._cleanupToken === cleanupToken && this._listeners.size === 0) {
+        this._releaseDependencies();
+      }
+    });
   }
 }
 
@@ -202,6 +287,8 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
   _error: any;
   _promise: ?Promise<mixed>;
   _version: number = 0;
+  _starting: boolean = false;
+  _cleanupToken: number = 0;
   _onDependencyChange: Listener;
   _meta: GraphMeta;
 
@@ -213,6 +300,7 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
       this._state = "idle";
       this._promise = null;
       notifyListeners(this._listeners);
+      this._scheduleUnobservedRelease();
     };
     this._meta = registerReadable(
       this,
@@ -232,7 +320,12 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
       return scope._getAsyncDerived(this);
     }
 
+    if (this._starting) {
+      throw new Error("FlowCell asyncDerived cycle detected.");
+    }
+
     if (this._state === "fulfilled") {
+      this._scheduleUnobservedRelease();
       return this._value as T;
     }
 
@@ -261,10 +354,12 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
       return scope._subscribeAsyncDerived(this, listener);
     }
 
+    this._cleanupToken += 1;
     this._listeners.add(listener);
 
     return () => {
       this._listeners.delete(listener);
+      cancelPendingListener(listener);
 
       if (this._listeners.size === 0) {
         this._releaseDependencies();
@@ -273,6 +368,10 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
   }
 
   _start(): void {
+    if (this._starting) {
+      throw new Error("FlowCell asyncDerived cycle detected.");
+    }
+
     const runVersion = this._version;
     const trackedDeps: Set<AnyReadable> = new Set(this._explicitDeps);
     const collector: DependencyCollector = {
@@ -283,13 +382,50 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
 
     let result;
 
+    this._starting = true;
+
     try {
       result = withDependencyTracking(collector, this._read);
     } catch (error) {
-      this._error = error;
-      this._state = "rejected";
+      if (isPromiseLike(error)) {
+        const promise = Promise.resolve(error).then(
+          () => {
+            if (this._version === runVersion && this._state === "pending") {
+              this._state = "idle";
+              this._promise = null;
+              notifyListeners(this._listeners);
+              this._scheduleUnobservedRelease();
+            }
+
+            return undefined;
+          },
+          thrown => {
+            if (this._version === runVersion && this._state === "pending") {
+              this._error = thrown;
+              this._state = "rejected";
+              this._promise = null;
+              notifyListeners(this._listeners);
+              this._scheduleUnobservedRelease();
+            }
+
+            return undefined;
+          }
+        );
+
+        this._value = undefined;
+        this._error = undefined;
+        this._promise = promise;
+        this._state = "pending";
+      } else {
+        this._error = error;
+        this._promise = null;
+        this._state = "rejected";
+      }
       this._bindDependencies(Array.from(trackedDeps));
+      this._starting = false;
       return;
+    } finally {
+      this._starting = false;
     }
 
     this._bindDependencies(Array.from(trackedDeps));
@@ -302,6 +438,7 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
           this._state = "fulfilled";
           this._promise = null;
           notifyListeners(this._listeners);
+          this._scheduleUnobservedRelease();
         }
 
         return value;
@@ -312,6 +449,7 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
           this._state = "rejected";
           this._promise = null;
           notifyListeners(this._listeners);
+          this._scheduleUnobservedRelease();
         }
 
         return undefined;
@@ -339,6 +477,7 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
 
   _releaseDependencies(): void {
     this._version += 1;
+    this._cleanupToken += 1;
 
     for (const unsubscribe of this._depUnsubscribers) {
       unsubscribe();
@@ -350,6 +489,21 @@ export class AsyncDerivedImpl<T> implements Readable<T> {
     this._value = undefined;
     this._error = undefined;
     this._promise = null;
+  }
+
+  _scheduleUnobservedRelease(): void {
+    if (this._listeners.size !== 0 || this._state === "pending") {
+      return;
+    }
+
+    const cleanupToken = this._cleanupToken + 1;
+    this._cleanupToken = cleanupToken;
+
+    defer(() => {
+      if (this._cleanupToken === cleanupToken && this._listeners.size === 0) {
+        this._releaseDependencies();
+      }
+    });
   }
 }
 

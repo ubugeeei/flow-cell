@@ -104,6 +104,10 @@ export function notifyListeners(listeners: Set<Listener>): void {
   }
 }
 
+export function cancelPendingListener(listener: Listener): void {
+  pendingListeners.delete(listener);
+}
+
 function flushListeners(): void {
   if (flushingListeners) {
     return;

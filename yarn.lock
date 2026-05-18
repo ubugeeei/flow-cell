@@ -1822,7 +1822,7 @@ __metadata:
     react: "npm:^19.2.6"
     react-dom: "npm:^19.2.6"
   peerDependencies:
-    react: ">=18.0.0"
+    react: ">=19.0.0"
   languageName: unknown
   linkType: soft
 

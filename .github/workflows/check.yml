@@ -1,21 +1,28 @@
-name: CI
+name: Check
 
 on:
   pull_request:
+    branches:
+      - main
   push:
     branches:
       - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: check-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   verify:
-    name: Verify / Node ${{ matrix.node-version }}
+    name: Node ${{ matrix.node-version }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -23,13 +30,12 @@ jobs:
       fail-fast: false
       matrix:
         node-version:
-          - 18.18.0
-          - 22.14.0
-          - 24.x
+          - lts/*
+          - current
 
     steps:
-      # actions/checkout@v5
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      # actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
 
@@ -37,6 +43,8 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
         with:
           node-version: ${{ matrix.node-version }}
+          cache: yarn
+          cache-dependency-path: yarn.lock
 
       - name: Enable Corepack
         run: corepack enable
@@ -44,8 +52,17 @@ jobs:
       - name: Install dependencies
         run: yarn install --immutable
 
-      - name: Verify
-        run: yarn verify
+      - name: Typecheck
+        run: yarn flow
+
+      - name: Test
+        run: yarn test
+
+      - name: Build
+        run: yarn build
+
+      - name: Smoke test
+        run: yarn smoke
 
       - name: Check package contents
         run: npm pack --dry-run
@@ -60,8 +77,8 @@ jobs:
       pull-requests: read
 
     steps:
-      # actions/checkout@v5
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      # actions/checkout@v6.0.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           persist-credentials: false
 

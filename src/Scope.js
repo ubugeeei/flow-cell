@@ -3,7 +3,9 @@
 import { CellImpl } from "./Cell";
 import { AsyncDerivedImpl, DerivedImpl } from "./Derived";
 import {
+  cancelPendingListener,
   clearDefaultScope,
+  isPromiseLike,
   notifyListeners,
   preloadReadable,
   sameReadables,
@@ -22,6 +24,10 @@ import type {
   Unsubscribe,
 } from "./Types";
 
+function defer(fn: () => void): void {
+  setTimeout(fn, 0);
+}
+
 type ScopedCellState<T> = {
   value: T,
   listeners: Set<Listener>,
@@ -31,9 +37,13 @@ type ScopedDerivedState = {
   deps: Array<AnyReadable>,
   depUnsubscribers: Array<Unsubscribe>,
   listeners: Set<Listener>,
-  state: "dirty" | "value" | "error",
+  state: "dirty" | "pending" | "value" | "error",
   value: any,
   error: any,
+  promise: ?Promise<mixed>,
+  version: number,
+  evaluating: boolean,
+  cleanupToken: number,
   onDependencyChange: Listener,
 };
 
@@ -46,6 +56,8 @@ type ScopedAsyncDerivedState = {
   error: any,
   promise: ?Promise<mixed>,
   version: number,
+  starting: boolean,
+  cleanupToken: number,
   onDependencyChange: Listener,
 };
 
@@ -170,17 +182,24 @@ export class ScopeImpl implements Scope {
     clearDefaultScope(this);
 
     for (const state of this._createdDerivedStates) {
+      state.version += 1;
+      state.cleanupToken += 1;
+
       for (const unsubscribe of state.depUnsubscribers) {
         unsubscribe();
       }
 
       state.depUnsubscribers = [];
       state.deps = [];
+      for (const listener of state.listeners) {
+        cancelPendingListener(listener);
+      }
       state.listeners.clear();
     }
 
     for (const state of this._createdAsyncDerivedStates) {
       state.version += 1;
+      state.cleanupToken += 1;
 
       for (const unsubscribe of state.depUnsubscribers) {
         unsubscribe();
@@ -188,6 +207,9 @@ export class ScopeImpl implements Scope {
 
       state.depUnsubscribers = [];
       state.deps = [];
+      for (const listener of state.listeners) {
+        cancelPendingListener(listener);
+      }
       state.listeners.clear();
       state.promise = null;
     }
@@ -196,6 +218,9 @@ export class ScopeImpl implements Scope {
       const state = this._cellStates.get(cellValue);
 
       if (state != null) {
+        for (const listener of state.listeners) {
+          cancelPendingListener(listener);
+        }
         state.listeners.clear();
       }
     }
@@ -228,6 +253,7 @@ export class ScopeImpl implements Scope {
 
     return () => {
       state.listeners.delete(listener);
+      cancelPendingListener(listener);
     };
   }
 
@@ -261,23 +287,35 @@ export class ScopeImpl implements Scope {
   _getDerived<T>(derivedValue: DerivedImpl<T>): T {
     const state = this._getDerivedState(derivedValue);
 
+    if (state.evaluating) {
+      throw new Error("FlowCell scoped derived cycle detected.");
+    }
+
     if (state.state === "dirty") {
       this._evaluateDerived(derivedValue, state);
+    }
+
+    if (state.state === "pending") {
+      throw state.promise;
     }
 
     if (state.state === "error") {
       throw state.error;
     }
 
-    return state.value as T;
+    const value = state.value as T;
+    this._scheduleScopedDerivedRelease(state);
+    return value;
   }
 
   _subscribeDerived<T>(derivedValue: DerivedImpl<T>, listener: Listener): Unsubscribe {
     const state = this._getDerivedState(derivedValue);
+    state.cleanupToken += 1;
     state.listeners.add(listener);
 
     return () => {
       state.listeners.delete(listener);
+      cancelPendingListener(listener);
 
       if (state.listeners.size === 0) {
         this._releaseScopedDerivedState(state);
@@ -314,10 +352,17 @@ export class ScopeImpl implements Scope {
       state: "dirty",
       value: undefined,
       error: undefined,
+      promise: null,
+      version: 0,
+      evaluating: false,
+      cleanupToken: 0,
       onDependencyChange: () => {
         if (state.state !== "dirty") {
+          state.version += 1;
           state.state = "dirty";
+          state.promise = null;
           notifyListeners(state.listeners);
+          this._scheduleScopedDerivedRelease(state);
         }
       },
     };
@@ -328,6 +373,11 @@ export class ScopeImpl implements Scope {
   }
 
   _evaluateDerived<T>(derivedValue: DerivedImpl<T>, state: ScopedDerivedState): void {
+    if (state.evaluating) {
+      throw new Error("FlowCell scoped derived cycle detected.");
+    }
+
+    const runVersion = state.version;
     const trackedDeps: Set<AnyReadable> = new Set(derivedValue._explicitDeps);
     const collector: DependencyCollector = {
       add: (readable: AnyReadable) => {
@@ -335,20 +385,59 @@ export class ScopeImpl implements Scope {
       },
     };
 
+    state.evaluating = true;
+
     try {
       const value = withScope(this, () => withDependencyTracking(collector, derivedValue._read));
       state.value = value;
       state.error = undefined;
+      state.promise = null;
       state.state = "value";
     } catch (error) {
-      state.error = error;
-      state.state = "error";
+      if (isPromiseLike(error)) {
+        const promise = Promise.resolve(error).then(
+          () => {
+            if (state.version === runVersion && state.state === "pending") {
+              state.state = "dirty";
+              state.promise = null;
+              notifyListeners(state.listeners);
+              this._scheduleScopedDerivedRelease(state);
+            }
+
+            return undefined;
+          },
+          thrown => {
+            if (state.version === runVersion && state.state === "pending") {
+              state.error = thrown;
+              state.promise = null;
+              state.state = "error";
+              notifyListeners(state.listeners);
+              this._scheduleScopedDerivedRelease(state);
+            }
+
+            return undefined;
+          }
+        );
+
+        state.value = undefined;
+        state.error = undefined;
+        state.promise = promise;
+        state.state = "pending";
+      } else {
+        state.error = error;
+        state.promise = null;
+        state.state = "error";
+      }
     } finally {
+      state.evaluating = false;
       this._bindScopedDependencies(state, Array.from(trackedDeps), derivedValue);
     }
   }
 
   _releaseScopedDerivedState(state: ScopedDerivedState): void {
+    state.version += 1;
+    state.cleanupToken += 1;
+
     for (const unsubscribe of state.depUnsubscribers) {
       unsubscribe();
     }
@@ -358,12 +447,33 @@ export class ScopeImpl implements Scope {
     state.state = "dirty";
     state.value = undefined;
     state.error = undefined;
+    state.promise = null;
+  }
+
+  _scheduleScopedDerivedRelease(state: ScopedDerivedState): void {
+    if (state.listeners.size !== 0 || state.state === "pending") {
+      return;
+    }
+
+    const cleanupToken = state.cleanupToken + 1;
+    state.cleanupToken = cleanupToken;
+
+    defer(() => {
+      if (!this._disposed && state.cleanupToken === cleanupToken && state.listeners.size === 0) {
+        this._releaseScopedDerivedState(state);
+      }
+    });
   }
 
   _getAsyncDerived<T>(derivedValue: AsyncDerivedImpl<T>): T {
     const state = this._getAsyncDerivedState(derivedValue);
 
+    if (state.starting) {
+      throw new Error("FlowCell scoped asyncDerived cycle detected.");
+    }
+
     if (state.state === "fulfilled") {
+      this._scheduleScopedAsyncDerivedRelease(state);
       return state.value as T;
     }
 
@@ -388,10 +498,12 @@ export class ScopeImpl implements Scope {
 
   _subscribeAsyncDerived<T>(derivedValue: AsyncDerivedImpl<T>, listener: Listener): Unsubscribe {
     const state = this._getAsyncDerivedState(derivedValue);
+    state.cleanupToken += 1;
     state.listeners.add(listener);
 
     return () => {
       state.listeners.delete(listener);
+      cancelPendingListener(listener);
 
       if (state.listeners.size === 0) {
         this._releaseScopedAsyncDerivedState(state);
@@ -430,11 +542,14 @@ export class ScopeImpl implements Scope {
       error: undefined,
       promise: null,
       version: 0,
+      starting: false,
+      cleanupToken: 0,
       onDependencyChange: () => {
         state.version += 1;
         state.state = "idle";
         state.promise = null;
         notifyListeners(state.listeners);
+        this._scheduleScopedAsyncDerivedRelease(state);
       },
     };
 
@@ -444,6 +559,10 @@ export class ScopeImpl implements Scope {
   }
 
   _startAsyncDerived<T>(derivedValue: AsyncDerivedImpl<T>, state: ScopedAsyncDerivedState): void {
+    if (state.starting) {
+      throw new Error("FlowCell scoped asyncDerived cycle detected.");
+    }
+
     const runVersion = state.version;
     const trackedDeps: Set<AnyReadable> = new Set(derivedValue._explicitDeps);
     const collector: DependencyCollector = {
@@ -454,13 +573,50 @@ export class ScopeImpl implements Scope {
 
     let result;
 
+    state.starting = true;
+
     try {
       result = withScope(this, () => withDependencyTracking(collector, derivedValue._read));
     } catch (error) {
-      state.error = error;
-      state.state = "rejected";
+      if (isPromiseLike(error)) {
+        const promise = Promise.resolve(error).then(
+          () => {
+            if (state.version === runVersion && state.state === "pending") {
+              state.state = "idle";
+              state.promise = null;
+              notifyListeners(state.listeners);
+              this._scheduleScopedAsyncDerivedRelease(state);
+            }
+
+            return undefined;
+          },
+          thrown => {
+            if (state.version === runVersion && state.state === "pending") {
+              state.error = thrown;
+              state.state = "rejected";
+              state.promise = null;
+              notifyListeners(state.listeners);
+              this._scheduleScopedAsyncDerivedRelease(state);
+            }
+
+            return undefined;
+          }
+        );
+
+        state.value = undefined;
+        state.error = undefined;
+        state.promise = promise;
+        state.state = "pending";
+      } else {
+        state.error = error;
+        state.promise = null;
+        state.state = "rejected";
+      }
       this._bindScopedDependencies(state, Array.from(trackedDeps), derivedValue);
+      state.starting = false;
       return;
+    } finally {
+      state.starting = false;
     }
 
     this._bindScopedDependencies(state, Array.from(trackedDeps), derivedValue);
@@ -473,6 +629,7 @@ export class ScopeImpl implements Scope {
           state.state = "fulfilled";
           state.promise = null;
           notifyListeners(state.listeners);
+          this._scheduleScopedAsyncDerivedRelease(state);
         }
 
         return value;
@@ -483,6 +640,7 @@ export class ScopeImpl implements Scope {
           state.state = "rejected";
           state.promise = null;
           notifyListeners(state.listeners);
+          this._scheduleScopedAsyncDerivedRelease(state);
         }
 
         return undefined;
@@ -495,6 +653,7 @@ export class ScopeImpl implements Scope {
 
   _releaseScopedAsyncDerivedState(state: ScopedAsyncDerivedState): void {
     state.version += 1;
+    state.cleanupToken += 1;
 
     for (const unsubscribe of state.depUnsubscribers) {
       unsubscribe();
@@ -506,6 +665,21 @@ export class ScopeImpl implements Scope {
     state.value = undefined;
     state.error = undefined;
     state.promise = null;
+  }
+
+  _scheduleScopedAsyncDerivedRelease(state: ScopedAsyncDerivedState): void {
+    if (state.listeners.size !== 0 || state.state === "pending") {
+      return;
+    }
+
+    const cleanupToken = state.cleanupToken + 1;
+    state.cleanupToken = cleanupToken;
+
+    defer(() => {
+      if (!this._disposed && state.cleanupToken === cleanupToken && state.listeners.size === 0) {
+        this._releaseScopedAsyncDerivedState(state);
+      }
+    });
   }
 
   _bindScopedDependencies(

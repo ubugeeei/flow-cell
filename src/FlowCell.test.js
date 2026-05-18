@@ -62,6 +62,20 @@ test("transaction batches listener notifications", () => {
   expect(listener).toHaveBeenCalledTimes(1);
 });
 
+test("unsubscribed listeners are removed from pending transaction flushes", () => {
+  const count = cell(0);
+  const listener = jest.fn();
+  const unsubscribe = count.subscribe(listener);
+
+  transaction(() => {
+    count.set(1);
+    unsubscribe();
+  });
+
+  expect(count.get()).toBe(1);
+  expect(listener).not.toHaveBeenCalled();
+});
+
 test("useCell subscribes React components with useSyncExternalStore", () => {
   const count = cell(0);
   const container = document.createElement("div");
@@ -210,6 +224,23 @@ test("derived releases global dependencies when no subscribers remain", () => {
   expect(doubled.get()).toBe(4);
 });
 
+test("derived releases unobserved global reads after the current turn", async () => {
+  const source = cell(1, { key: "test.unobserved.source" });
+  const doubled = derived(get => get(source) * 2, { key: "test.unobserved.doubled" });
+
+  expect(doubled.get()).toBe(2);
+  expect(inspectGraph().nodes.find(node => node.id === "test.unobserved.doubled").dependencies).toEqual([
+    "test.unobserved.source",
+  ]);
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  expect(inspectGraph().nodes.find(node => node.id === "test.unobserved.doubled").dependencies).toEqual([]);
+
+  source.set(2);
+  expect(doubled.get()).toBe(4);
+});
+
 test("scoped derived values release dependencies when no subscribers remain", () => {
   const source = cell(1, { key: "test.scoped.release.source" });
   const doubled = derived(get => get(source) * 2, { key: "test.scoped.release.doubled" });
@@ -224,6 +255,23 @@ test("scoped derived values release dependencies when no subscribers remain", ()
   unsubscribe();
 
   expect(inspectGraph(scope).nodes.find(node => node.id === "test.scoped.release.doubled").dependencies).toEqual([]);
+  scope.set(source, 2);
+  expect(scope.get(doubled)).toBe(4);
+});
+
+test("scoped derived values release unobserved reads after the current turn", async () => {
+  const source = cell(1, { key: "test.scoped.unobserved.source" });
+  const doubled = derived(get => get(source) * 2, { key: "test.scoped.unobserved.doubled" });
+  const scope = createScope();
+
+  expect(scope.get(doubled)).toBe(2);
+  expect(inspectGraph(scope).nodes.find(node => node.id === "test.scoped.unobserved.doubled").dependencies).toEqual([
+    "test.scoped.unobserved.source",
+  ]);
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  expect(inspectGraph(scope).nodes.find(node => node.id === "test.scoped.unobserved.doubled").dependencies).toEqual([]);
   scope.set(source, 2);
   expect(scope.get(doubled)).toBe(4);
 });
@@ -274,6 +322,36 @@ test("asyncDerived supports getter-style reads", async () => {
   await Promise.resolve();
 
   expect(user.get()).toEqual({ id: "1", name: "User 1" });
+});
+
+test("derived propagates Suspense from async dependencies", async () => {
+  const source = asyncDerived(async () => "ready", { key: "test.derived.suspense.source" });
+  const message = derived(get => `${get(source)}!`, { key: "test.derived.suspense.message" });
+
+  expect(() => message.get()).toThrow(Promise);
+  expect(inspectGraph().nodes.find(node => node.id === "test.derived.suspense.message").status).toBe("pending");
+
+  await expect(preload(message)).resolves.toBe("ready!");
+});
+
+test("asyncDerived waits on async dependencies without entering an error state", async () => {
+  const source = asyncDerived(async () => "ready", { key: "test.async.chain.source" });
+  const message = asyncDerived(async get => `${get(source)}!`, { key: "test.async.chain.message" });
+
+  expect(() => message.get()).toThrow(Promise);
+  expect(inspectGraph().nodes.find(node => node.id === "test.async.chain.message").status).toBe("pending");
+
+  await expect(preload(message)).resolves.toBe("ready!");
+});
+
+test("derived reports cyclic dependencies instead of overflowing the stack", () => {
+  let first;
+  let second;
+
+  first = derived(() => second.get(), { key: "test.cycle.first" });
+  second = derived(() => first.get(), { key: "test.cycle.second" });
+
+  expect(() => first.get()).toThrow("cycle detected");
 });
 
 test("inspectGraph exposes serializable nodes and dependency edges", () => {
@@ -362,6 +440,21 @@ test("scope.run executes module-level writes against that scope", () => {
 
   expect(scope.get(count)).toBe(5);
   expect(count.get()).toBe(0);
+});
+
+test("scoped transaction flushes ignore listeners removed before commit", () => {
+  const count = cell(0, { key: "test.scoped.transaction.count" });
+  const scope = createScope();
+  const listener = jest.fn();
+  const unsubscribe = scope.subscribe(count, listener);
+
+  transaction(() => {
+    scope.set(count, 1);
+    unsubscribe();
+  });
+
+  expect(scope.get(count)).toBe(1);
+  expect(listener).not.toHaveBeenCalled();
 });
 
 test("scope.dispose clears subscriptions and prevents later use", () => {

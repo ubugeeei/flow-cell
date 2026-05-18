@@ -1,6 +1,7 @@
 /* @flow strict */
 
 import {
+  cancelPendingListener,
   currentScope,
   notifyListeners,
   registerReadable,
@@ -85,6 +86,7 @@ export class CellImpl<T> implements Writable<T> {
     this._listeners.add(listener);
     return () => {
       this._listeners.delete(listener);
+      cancelPendingListener(listener);
     };
   }
 }

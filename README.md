@@ -198,6 +198,8 @@ yarn install
 yarn verify
 ```
 
+Development and CI run on active Node.js LTS or newer.
+
 ## Production Notes
 
 - Scopes isolate state per request or root; dispose them when the request/root is finished.
@@ -205,6 +207,9 @@ yarn verify
 - Snapshots are versioned and keyed; use stable `key` values for any cell that crosses SSR hydration.
 - Server and client entries are split so RSC code can use the graph without pulling React client hooks.
 - Published files are flat and side-effect free: CJS, ESM, Flow declarations, README, and LICENSE only.
+- Derived nodes release unobserved dependency subscriptions after React and Suspense have a chance to retry, which keeps SSR reads and preloads from retaining graph edges.
+- Listener queues remove unsubscribed listeners before a transaction flush, so unmounted roots and disposed scopes do not receive stale notifications.
+- Cyclic derived graphs fail with a FlowCell error instead of overflowing the stack.
 
 ## Keyed values
 
