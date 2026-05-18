@@ -1,0 +1,22 @@
+[ignore]
+.*/node_modules/.*
+.*/dist/.*
+<PROJECT_ROOT>/Flowcell.js
+<PROJECT_ROOT>/Flowcell.mjs
+<PROJECT_ROOT>/Flowcell.js.flow
+<PROJECT_ROOT>/src/Flowcell.test.js
+
+[include]
+<PROJECT_ROOT>/src/Flowcell.js
+<PROJECT_ROOT>/src/Flowcell.js.flow
+<PROJECT_ROOT>/src/PublicApi.flowtest.js
+
+[libs]
+
+[lints]
+
+[options]
+module.name_mapper='^flowcell$' -> '<PROJECT_ROOT>/src/Flowcell.js'
+react.runtime=automatic
+
+[strict]
